@@ -40,6 +40,12 @@ public class PublicController {
                 .filter(p -> category.equalsIgnoreCase(p.getCategory()))
                 .toList();
     }
+    
+    @GetMapping("/health")
+    public String health() {
+        System.out.println("Yes, your cron is running. I am live!");
+        return "Yes, your cron is running. I am live!";
+    }
 
     private static int rank(Product p) {
         if (p.isComingSoon()) return 2;
