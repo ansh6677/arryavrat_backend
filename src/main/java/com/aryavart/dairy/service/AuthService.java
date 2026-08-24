@@ -31,6 +31,7 @@ public class AuthService {
                     "This phone number is already registered. Please login.");
         }
         User user = new User();
+        user.setSignupSource("PAGE");
         user.setName(req.name().trim());
         user.setPhone(phone);
         user.setEmail(req.email());

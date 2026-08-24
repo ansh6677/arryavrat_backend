@@ -33,5 +33,14 @@ public class User {
 
     private boolean active = true;
 
+    /** How this customer joined: PAGE = self-registered on the website, ADF = added by the farm. */
+    private String signupSource;
+
+    /** Products this customer usually takes — pre-ticked in the daily entry sheet. */
+    private java.util.List<String> preferredProductIds;
+
+    /** Usual daily quantity per product (productId → qty); missing entries default to 1. */
+    private java.util.Map<String, Double> preferredQuantities;
+
     private Instant createdAt = Instant.now();
 }

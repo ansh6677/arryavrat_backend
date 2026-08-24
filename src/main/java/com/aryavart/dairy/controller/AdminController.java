@@ -10,11 +10,13 @@ import com.aryavart.dairy.dto.StaffRequest;
 import com.aryavart.dairy.dto.StatsResponse;
 import com.aryavart.dairy.model.DailyEntry;
 import com.aryavart.dairy.model.Expense;
+import com.aryavart.dairy.model.ExtraSale;
 import com.aryavart.dairy.model.Payment;
 import com.aryavart.dairy.model.Product;
 import com.aryavart.dairy.model.User;
 import com.aryavart.dairy.repository.DailyEntryRepository;
 import com.aryavart.dairy.repository.ExpenseRepository;
+import com.aryavart.dairy.repository.ExtraSaleRepository;
 import com.aryavart.dairy.repository.PaymentRepository;
 import com.aryavart.dairy.repository.ProductRepository;
 import com.aryavart.dairy.repository.UserRepository;
@@ -55,6 +57,7 @@ public class AdminController {
     private final DailyEntryRepository entryRepository;
     private final PaymentRepository paymentRepository;
     private final ExpenseRepository expenseRepository;
+    private final ExtraSaleRepository extraSaleRepository;
     private final BillingService billingService;
     private final StatsService statsService;
     private final PasswordEncoder passwordEncoder;
@@ -64,9 +67,11 @@ public class AdminController {
 
     public AdminController(UserRepository userRepository, ProductRepository productRepository,
                            DailyEntryRepository entryRepository, PaymentRepository paymentRepository,
-                           ExpenseRepository expenseRepository, BillingService billingService,
+                           ExpenseRepository expenseRepository, ExtraSaleRepository extraSaleRepository,
+                           BillingService billingService,
                            StatsService statsService, PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
+        this.extraSaleRepository = extraSaleRepository;
         this.productRepository = productRepository;
         this.entryRepository = entryRepository;
         this.paymentRepository = paymentRepository;
@@ -100,6 +105,9 @@ public class AdminController {
         user.setPassword(passwordEncoder.encode(rawPassword));
         user.setRole("CUSTOMER");
         user.setActive(req.active() == null || req.active());
+        user.setSignupSource("ADF");
+        user.setPreferredProductIds(req.preferredProductIds());
+        user.setPreferredQuantities(req.preferredQuantities());
         return userRepository.save(user);
     }
 
@@ -121,6 +129,8 @@ public class AdminController {
             user.setPassword(passwordEncoder.encode(req.password()));
         }
         if (req.active() != null) user.setActive(req.active());
+        if (req.preferredProductIds() != null) user.setPreferredProductIds(req.preferredProductIds());
+        if (req.preferredQuantities() != null) user.setPreferredQuantities(req.preferredQuantities());
         return userRepository.save(user);
     }
 
@@ -401,6 +411,7 @@ public class AdminController {
         product.setImageUrl(req.getImageUrl());
         product.setAvailable(req.isAvailable());
         product.setComingSoon(req.isComingSoon());
+        product.setSortOrder(req.getSortOrder());
         return productRepository.save(product);
     }
 
@@ -495,6 +506,84 @@ public class AdminController {
     }
 
     // ------------------------------- Stats --------------------------------
+
+    // ------------------------------ Extra sales (walk-in counter) ------------------------------
+
+    /** Records an offline counter sale. Paid on the spot — no customer ledger involved. */
+    @PostMapping("/extra-sales")
+    public ExtraSale addExtraSale(@RequestBody ExtraSale req) {
+        double qty = (req.getQuantity() > 0) ? req.getQuantity() : 0;
+        if (qty <= 0) throw badRequest("Quantity must be greater than 0");
+
+        String name = (req.getProductName() == null) ? null : req.getProductName().trim();
+        double rate = req.getRate();
+        String unit = (req.getUnit() == null || req.getUnit().isBlank()) ? null : req.getUnit().trim();
+
+        // Picking a listed product fills in whatever the request left blank.
+        if (req.getProductId() != null && !req.getProductId().isBlank()) {
+            Product product = productRepository.findById(req.getProductId())
+                    .orElseThrow(() -> notFound("Product not found"));
+            if (name == null || name.isBlank()) name = product.getName();
+            if (rate <= 0) rate = product.getPrice();
+            if (unit == null) unit = product.getUnit();
+        }
+        if (name == null || name.isBlank()) throw badRequest("Please pick a product or type the item name");
+        if (rate <= 0) throw badRequest("Rate must be greater than 0");
+
+        ExtraSale sale = new ExtraSale();
+        sale.setCustomerName((req.getCustomerName() == null || req.getCustomerName().isBlank())
+                ? "Walk-in customer" : req.getCustomerName().trim());
+        sale.setProductId((req.getProductId() == null || req.getProductId().isBlank()) ? null : req.getProductId());
+        sale.setProductName(name);
+        sale.setUnit(unit);
+        sale.setQuantity(BillingService.round2(qty));
+        sale.setRate(BillingService.round2(rate));
+        sale.setTotal(BillingService.round2(qty * rate));
+        sale.setSaleDate(req.getSaleDate() != null ? req.getSaleDate() : LocalDate.now());
+        sale.setPaymentMode((req.getPaymentMode() == null || req.getPaymentMode().isBlank()) ? "Cash" : req.getPaymentMode());
+        sale.setNote(req.getNote());
+        return extraSaleRepository.save(sale);
+    }
+
+    @GetMapping("/extra-sales")
+    public List<ExtraSale> extraSales(@RequestParam(required = false)
+                                      @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                      @RequestParam(required = false)
+                                      @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        LocalDate f = (from != null) ? from : LocalDate.now().withDayOfMonth(1);
+        LocalDate t = (to != null) ? to : LocalDate.now();
+        return extraSaleRepository.findInRange(f, t);
+    }
+
+    /** The page's own mini-dashboard: today / this month / all time. */
+    @GetMapping("/extra-sales/summary")
+    public Map<String, Object> extraSalesSummary() {
+        LocalDate today = LocalDate.now();
+        LocalDate monthStart = today.withDayOfMonth(1);
+        List<ExtraSale> all = extraSaleRepository.findAll();
+        double todayTotal = 0, monthTotal = 0, allTotal = 0;
+        long monthCount = 0;
+        for (ExtraSale x : all) {
+            allTotal += x.getTotal();
+            LocalDate d = x.getSaleDate();
+            if (d == null) continue;
+            if (!d.isBefore(monthStart) && !d.isAfter(today)) { monthTotal += x.getTotal(); monthCount++; }
+            if (today.equals(d)) todayTotal += x.getTotal();
+        }
+        return Map.of(
+                "todayTotal", BillingService.round2(todayTotal),
+                "monthTotal", BillingService.round2(monthTotal),
+                "allTimeTotal", BillingService.round2(allTotal),
+                "monthCount", monthCount,
+                "allCount", all.size());
+    }
+
+    @DeleteMapping("/extra-sales/{id}")
+    public Map<String, String> deleteExtraSale(@PathVariable String id) {
+        if (!extraSaleRepository.existsById(id)) throw notFound("Sale not found");
+        extraSaleRepository.deleteById(id);
+        return Map.of("status", "deleted");
+    }
 
     @GetMapping("/stats/overview")
     public StatsResponse stats(@RequestParam(required = false) String month) {

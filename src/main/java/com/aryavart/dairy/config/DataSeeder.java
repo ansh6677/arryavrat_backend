@@ -95,16 +95,16 @@ public class DataSeeder implements CommandLineRunner {
             return;
         }
         productRepository.saveAll(List.of(
-                product("Pure A2 Cow Milk", "Milk", "Litre", 90,
-                        "Farm-fresh A2 milk from healthy desi cows, delivered within 2 hours of milking."),
-                product("Pure A2 Curd (Dahi)", "Curd", "Kg", 120,
-                        "Thick, traditional-set curd made from pure A2 milk — just like homemade."),
-                product("Fresh A2 Paneer", "Paneer", "Kg", 450,
-                        "Soft, fresh paneer made daily from the finest farm milk."),
-                product("A2 Desi Ghee (Bilona)", "Ghee", "Kg", 2200,
-                        "Slow-churned bilona ghee with rich aroma, golden colour and authentic taste."),
-                product("Fresh Buttermilk (Chaach)", "Buttermilk", "Litre", 40,
-                        "Light, refreshing buttermilk churned daily from farm-fresh curd.")));
+                ordered(1, product("Pure A2 Cow Milk", "Milk", "Litre", 90,
+                        "Farm-fresh A2 milk from healthy desi cows, delivered within 2 hours of milking.")),
+                ordered(2, product("Pure A2 Curd (Dahi)", "Curd", "Kg", 120,
+                        "Thick, traditional-set curd made from pure A2 milk — just like homemade.")),
+                ordered(3, product("Fresh A2 Paneer", "Paneer", "Kg", 450,
+                        "Soft, fresh paneer made daily from the finest farm milk.")),
+                ordered(4, product("A2 Desi Ghee (Bilona)", "Ghee", "Kg", 2200,
+                        "Slow-churned bilona ghee with rich aroma, golden colour and authentic taste.")),
+                ordered(5, product("Fresh Buttermilk (Chaach)", "Buttermilk", "Litre", 40,
+                        "Light, refreshing buttermilk churned daily from farm-fresh curd."))));
         // Upcoming products the farm is preparing — admins can edit or remove these.
         productRepository.saveAll(List.of(
                 comingSoon("Farm Fresh Mushrooms", "Mushroom", "Kg", 320,
@@ -127,6 +127,11 @@ public class DataSeeder implements CommandLineRunner {
                 productRepository.save(p);
             }
         }
+    }
+
+    private Product ordered(int sortOrder, Product p) {
+        p.setSortOrder(sortOrder);
+        return p;
     }
 
     /** Teaser product: visible on the site with a "Coming soon" badge. */
