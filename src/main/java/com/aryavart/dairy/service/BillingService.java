@@ -61,9 +61,19 @@ public class BillingService {
 
         double outstanding = round2(lifetimePurchases - lifetimePaid);
 
+        // Old dues carried into this bill: everything bought minus everything paid
+        // before the period began — shown separately so past-month balances are clear.
+        double prevPurchases = entryRepository.findByCustomerIdOrderByEntryDateAsc(customerId).stream()
+                .filter(e -> e.getEntryDate() != null && e.getEntryDate().isBefore(f))
+                .mapToDouble(DailyEntry::getTotal).sum();
+        double prevPaid = allPayments.stream()
+                .filter(p -> p.getPaymentDate() != null && p.getPaymentDate().isBefore(f))
+                .mapToDouble(Payment::getAmount).sum();
+        double previousBalance = round2(prevPurchases - prevPaid);
+
         return new BillResponse(customer.getId(), customer.getName(), customer.getPhone(), customer.getAddress(),
                 from, to, periodEntries, round2(periodTotal), periodPayments, round2(periodPaid),
-                round2(lifetimePurchases), round2(lifetimePaid), outstanding);
+                round2(lifetimePurchases), round2(lifetimePaid), previousBalance, outstanding);
     }
 
     public static double round2(double value) {
