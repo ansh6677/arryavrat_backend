@@ -102,6 +102,7 @@ public class AdminController {
         user.setActive(req.active() == null || req.active());
         user.setSignupSource("ADF");
         user.setPreferredProductIds(req.preferredProductIds());
+        user.setPreferredQuantities(req.preferredQuantities());
         return userRepository.save(user);
     }
 
@@ -124,6 +125,7 @@ public class AdminController {
         }
         if (req.active() != null) user.setActive(req.active());
         if (req.preferredProductIds() != null) user.setPreferredProductIds(req.preferredProductIds());
+        if (req.preferredQuantities() != null) user.setPreferredQuantities(req.preferredQuantities());
         return userRepository.save(user);
     }
 
