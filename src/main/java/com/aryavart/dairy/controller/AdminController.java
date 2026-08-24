@@ -100,6 +100,8 @@ public class AdminController {
         user.setPassword(passwordEncoder.encode(rawPassword));
         user.setRole("CUSTOMER");
         user.setActive(req.active() == null || req.active());
+        user.setSignupSource("ADF");
+        user.setPreferredProductIds(req.preferredProductIds());
         return userRepository.save(user);
     }
 
@@ -121,6 +123,7 @@ public class AdminController {
             user.setPassword(passwordEncoder.encode(req.password()));
         }
         if (req.active() != null) user.setActive(req.active());
+        if (req.preferredProductIds() != null) user.setPreferredProductIds(req.preferredProductIds());
         return userRepository.save(user);
     }
 
@@ -401,6 +404,7 @@ public class AdminController {
         product.setImageUrl(req.getImageUrl());
         product.setAvailable(req.isAvailable());
         product.setComingSoon(req.isComingSoon());
+        product.setSortOrder(req.getSortOrder());
         return productRepository.save(product);
     }
 
