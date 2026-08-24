@@ -24,5 +24,8 @@ public class Product {
     /** Teaser products (e.g. Mushroom, Spices) shown on the site before launch. */
     private boolean comingSoon = false;
 
+    /** Display position on the website and slider — lower comes first. */
+    private int sortOrder = 100;
+
     private Instant createdAt = Instant.now();
 }

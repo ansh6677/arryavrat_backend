@@ -31,7 +31,9 @@ public class PublicController {
     @GetMapping("/products")
     public List<Product> products(@RequestParam(required = false) String category) {
         List<Product> products = productRepository.findAllByOrderByCategoryAscNameAsc().stream()
-                .sorted(Comparator.comparingInt(PublicController::rank))
+                .sorted(Comparator.comparingInt(PublicController::rank)
+                        .thenComparingInt(Product::getSortOrder)
+                        .thenComparing(Product::getName, String.CASE_INSENSITIVE_ORDER))
                 .toList();
         if (category == null || category.isBlank() || "All".equalsIgnoreCase(category)) {
             return products;

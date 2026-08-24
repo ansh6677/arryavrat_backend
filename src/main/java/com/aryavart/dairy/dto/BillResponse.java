@@ -19,5 +19,7 @@ public record BillResponse(
         double periodPaid,
         double lifetimePurchases,
         double lifetimePaid,
+        /** Dues carried in from before this period: purchases minus payments up to the day before 'from'. */
+        double previousBalance,
         double outstanding) {
 }
