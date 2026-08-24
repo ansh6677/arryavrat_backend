@@ -10,6 +10,10 @@ public record StatsResponse(
         double todaySales,
         double monthSales,
         double totalSales,
+        /** Walk-in counter sales — already included in the sales figures above. */
+        double todayExtraSales,
+        double monthExtraSales,
+        double totalExtraSales,
         double totalPaymentsReceived,
         double totalOutstanding,
         double todayExpenses,
@@ -30,7 +34,9 @@ public record StatsResponse(
     public record DatePoint(String label, double total) {
     }
 
-    public record DayPoint(String date, String label, double sales, double expenses) {
+    public record DayPoint(String date, String label, double sales, double expenses,
+                           /** Walk-in slice of that day's sales. */
+                           double extra) {
     }
 
     public record MonthOption(String value, String label) {

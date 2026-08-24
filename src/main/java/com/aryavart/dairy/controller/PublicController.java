@@ -2,6 +2,8 @@ package com.aryavart.dairy.controller;
 
 import com.aryavart.dairy.model.Product;
 import com.aryavart.dairy.repository.ProductRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -15,6 +17,8 @@ import java.util.Objects;
 @RestController
 @RequestMapping("/api/public")
 public class PublicController {
+
+    private static final Logger log = LoggerFactory.getLogger(PublicController.class);
 
     private final ProductRepository productRepository;
 
@@ -43,10 +47,11 @@ public class PublicController {
                 .toList();
     }
     
+    /** Keep-alive ping for the hosting cron — a spun-down free dyno wakes on this. */
     @GetMapping("/health")
     public String health() {
-        System.out.println("Yes, your cron is running. I am live!");
-        return "Yes, your cron is running. I am live!";
+        log.debug("Health ping received");
+        return "OK";
     }
 
     private static int rank(Product p) {

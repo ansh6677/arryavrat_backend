@@ -8,9 +8,11 @@ import com.aryavart.dairy.dto.StatsResponse.MonthOption;
 import com.aryavart.dairy.dto.StatsResponse.ProductSale;
 import com.aryavart.dairy.model.DailyEntry;
 import com.aryavart.dairy.model.Expense;
+import com.aryavart.dairy.model.ExtraSale;
 import com.aryavart.dairy.model.Payment;
 import com.aryavart.dairy.repository.DailyEntryRepository;
 import com.aryavart.dairy.repository.ExpenseRepository;
+import com.aryavart.dairy.repository.ExtraSaleRepository;
 import com.aryavart.dairy.repository.PaymentRepository;
 import com.aryavart.dairy.repository.ProductRepository;
 import com.aryavart.dairy.repository.UserRepository;
@@ -38,13 +40,16 @@ public class StatsService {
     private final DailyEntryRepository entryRepository;
     private final PaymentRepository paymentRepository;
     private final ExpenseRepository expenseRepository;
+    private final ExtraSaleRepository extraSaleRepository;
     private final UserRepository userRepository;
     private final ProductRepository productRepository;
 
     public StatsService(DailyEntryRepository entryRepository, PaymentRepository paymentRepository,
-                        ExpenseRepository expenseRepository, UserRepository userRepository,
+                        ExpenseRepository expenseRepository, ExtraSaleRepository extraSaleRepository,
+                        UserRepository userRepository,
                         ProductRepository productRepository) {
         this.entryRepository = entryRepository;
+        this.extraSaleRepository = extraSaleRepository;
         this.paymentRepository = paymentRepository;
         this.expenseRepository = expenseRepository;
         this.userRepository = userRepository;
@@ -77,10 +82,23 @@ public class StatsService {
         List<DailyEntry> allEntries = entryRepository.findAll();
         List<Payment> allPayments = paymentRepository.findAll();
         List<Expense> allExpenses = expenseRepository.findAll();
+        List<ExtraSale> allExtra = extraSaleRepository.findAll();
 
-        double totalSales = allEntries.stream().mapToDouble(DailyEntry::getTotal).sum();
-        double totalPaid = allPayments.stream().mapToDouble(Payment::getAmount).sum();
+        // Walk-in sales count as sales AND as money already received, so the
+        // outstanding figure (sales - paid) stays untouched by them.
+        double totalExtraSales = allExtra.stream().mapToDouble(ExtraSale::getTotal).sum();
+        double totalSales = allEntries.stream().mapToDouble(DailyEntry::getTotal).sum() + totalExtraSales;
+        double totalPaid = allPayments.stream().mapToDouble(Payment::getAmount).sum() + totalExtraSales;
         double totalExpenses = allExpenses.stream().mapToDouble(Expense::getAmount).sum();
+
+        double todayExtraSales = 0;
+        double monthExtraSales = 0;
+        for (ExtraSale x : allExtra) {
+            LocalDate d = x.getSaleDate();
+            if (d == null) continue;
+            if (today.equals(d)) todayExtraSales += x.getTotal();
+            if (!d.isBefore(monthStart) && !d.isAfter(monthEnd)) monthExtraSales += x.getTotal();
+        }
 
         double todaySales = 0;
         double monthSales = 0;
@@ -114,6 +132,26 @@ public class StatsService {
             }
         }
 
+        for (ExtraSale x : allExtra) {
+            LocalDate d = x.getSaleDate();
+            if (d == null) continue;
+            boolean inMonth = !d.isBefore(monthStart) && !d.isAfter(monthEnd);
+            boolean isToday = today.equals(d);
+            if (!inMonth && !isToday) continue;
+            String key = x.getProductId() != null ? x.getProductId() : "x:" + x.getProductName();
+            Agg agg = byProduct.computeIfAbsent(key, k -> new Agg());
+            if (agg.name == null) agg.name = x.getProductName();
+            if (agg.unit == null) agg.unit = x.getUnit();
+            if (inMonth) {
+                agg.monthQty += x.getQuantity();
+                agg.monthAmt += x.getTotal();
+            }
+            if (isToday) {
+                agg.todayQty += x.getQuantity();
+                agg.todayAmt += x.getTotal();
+            }
+        }
+
         List<ProductSale> productSales = byProduct.entrySet().stream()
                 .map(en -> new ProductSale(
                         en.getKey(),
@@ -143,20 +181,30 @@ public class StatsService {
                 .filter(x -> x.getExpenseDate() != null)
                 .collect(Collectors.groupingBy(Expense::getExpenseDate,
                         Collectors.summingDouble(Expense::getAmount)));
+        Map<LocalDate, Double> extraByDate = allExtra.stream()
+                .filter(x -> x.getSaleDate() != null)
+                .collect(Collectors.groupingBy(ExtraSale::getSaleDate,
+                        Collectors.summingDouble(ExtraSale::getTotal)));
 
         List<DayPoint> days = new ArrayList<>();
         for (LocalDate d = monthStart; !d.isAfter(monthEnd); d = d.plusDays(1)) {
+            double extra = extraByDate.getOrDefault(d, 0.0);
             days.add(new DayPoint(
                     d.toString(),
                     DAY_LABEL.format(d),
-                    BillingService.round2(salesByDate.getOrDefault(d, 0.0)),
-                    BillingService.round2(expenseByDate.getOrDefault(d, 0.0))));
+                    BillingService.round2(salesByDate.getOrDefault(d, 0.0) + extra),
+                    BillingService.round2(expenseByDate.getOrDefault(d, 0.0)),
+                    BillingService.round2(extra)));
         }
 
         Map<YearMonth, Double> byMonth = allEntries.stream()
                 .filter(e -> e.getEntryDate() != null)
                 .collect(Collectors.groupingBy(e -> YearMonth.from(e.getEntryDate()),
                         Collectors.summingDouble(DailyEntry::getTotal)));
+        for (ExtraSale x : allExtra) {
+            if (x.getSaleDate() == null) continue;
+            byMonth.merge(YearMonth.from(x.getSaleDate()), x.getTotal(), Double::sum);
+        }
 
         List<DatePoint> monthly = new ArrayList<>();
         List<MonthOption> months = new ArrayList<>();
@@ -170,15 +218,18 @@ public class StatsService {
         return new StatsResponse(
                 month.toString(),
                 MONTH_LONG.format(monthStart),
-                BillingService.round2(todaySales),
-                BillingService.round2(monthSales),
+                BillingService.round2(todaySales + todayExtraSales),
+                BillingService.round2(monthSales + monthExtraSales),
                 BillingService.round2(totalSales),
+                BillingService.round2(todayExtraSales),
+                BillingService.round2(monthExtraSales),
+                BillingService.round2(totalExtraSales),
                 BillingService.round2(totalPaid),
                 BillingService.round2(totalSales - totalPaid),
                 BillingService.round2(todayExpenses),
                 BillingService.round2(monthExpenses),
                 BillingService.round2(totalExpenses),
-                BillingService.round2(monthSales - monthExpenses),
+                BillingService.round2(monthSales + monthExtraSales - monthExpenses),
                 userRepository.countByRole("CUSTOMER"),
                 productRepository.count(),
                 todayEntryCount,
@@ -192,8 +243,10 @@ public class StatsService {
     public DayDetail day(LocalDate date) {
         List<DailyEntry> entries = entryRepository.findInRange(date, date);
         List<Expense> expenses = expenseRepository.findInRange(date, date);
+        List<ExtraSale> extras = extraSaleRepository.findInRange(date, date);
 
-        double sales = entries.stream().mapToDouble(DailyEntry::getTotal).sum();
+        double extraTotal = extras.stream().mapToDouble(ExtraSale::getTotal).sum();
+        double sales = entries.stream().mapToDouble(DailyEntry::getTotal).sum() + extraTotal;
         double spent = expenses.stream().mapToDouble(Expense::getAmount).sum();
 
         List<DayDetail.EntryRow> entryRows = entries.stream()
@@ -219,6 +272,17 @@ public class StatsService {
                         BillingService.round2(x.getAmount())))
                 .toList();
 
+        List<DayDetail.ExtraRow> extraRows = extras.stream()
+                .map(x -> new DayDetail.ExtraRow(
+                        x.getCustomerName(),
+                        x.getProductName(),
+                        BillingService.round2(x.getQuantity()),
+                        x.getUnit(),
+                        BillingService.round2(x.getRate()),
+                        BillingService.round2(x.getTotal()),
+                        x.getPaymentMode()))
+                .toList();
+
         return new DayDetail(
                 date.toString(),
                 FULL_DAY_LABEL.format(date),
@@ -227,7 +291,10 @@ public class StatsService {
                 BillingService.round2(sales - spent),
                 entryRows.size(),
                 expenseRows.size(),
+                BillingService.round2(extraTotal),
+                extraRows.size(),
                 entryRows,
-                expenseRows);
+                expenseRows,
+                extraRows);
     }
 }
