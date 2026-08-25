@@ -11,12 +11,14 @@ import com.aryavart.dairy.dto.StatsResponse;
 import com.aryavart.dairy.model.DailyEntry;
 import com.aryavart.dairy.model.Expense;
 import com.aryavart.dairy.model.ExtraSale;
+import com.aryavart.dairy.model.LoginEvent;
 import com.aryavart.dairy.model.Payment;
 import com.aryavart.dairy.model.Product;
 import com.aryavart.dairy.model.User;
 import com.aryavart.dairy.repository.DailyEntryRepository;
 import com.aryavart.dairy.repository.ExpenseRepository;
 import com.aryavart.dairy.repository.ExtraSaleRepository;
+import com.aryavart.dairy.repository.LoginEventRepository;
 import com.aryavart.dairy.repository.PaymentRepository;
 import com.aryavart.dairy.repository.ProductRepository;
 import com.aryavart.dairy.repository.UserRepository;
@@ -58,6 +60,7 @@ public class AdminController {
     private final PaymentRepository paymentRepository;
     private final ExpenseRepository expenseRepository;
     private final ExtraSaleRepository extraSaleRepository;
+    private final LoginEventRepository loginEventRepository;
     private final BillingService billingService;
     private final StatsService statsService;
     private final PasswordEncoder passwordEncoder;
@@ -68,10 +71,12 @@ public class AdminController {
     public AdminController(UserRepository userRepository, ProductRepository productRepository,
                            DailyEntryRepository entryRepository, PaymentRepository paymentRepository,
                            ExpenseRepository expenseRepository, ExtraSaleRepository extraSaleRepository,
+                           LoginEventRepository loginEventRepository,
                            BillingService billingService,
                            StatsService statsService, PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
         this.extraSaleRepository = extraSaleRepository;
+        this.loginEventRepository = loginEventRepository;
         this.productRepository = productRepository;
         this.entryRepository = entryRepository;
         this.paymentRepository = paymentRepository;
@@ -115,6 +120,11 @@ public class AdminController {
     public User updateCustomer(@PathVariable String id, @RequestBody CustomerRequest req) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> notFound("Customer not found"));
+        // The customer route must never touch the super admin — or any staff
+        // account. Without this, passing a staff id here could rename them,
+        // reset their password or deactivate them through the back door.
+        guardSuperAdmin(user);
+        if (!"CUSTOMER".equals(user.getRole())) throw notFound("Customer not found");
         if (req.name() != null && !req.name().isBlank()) user.setName(req.name().trim());
         if (req.phone() != null && !req.phone().isBlank() && !req.phone().trim().equals(user.getPhone())) {
             String phone = req.phone().trim();
@@ -490,8 +500,15 @@ public class AdminController {
         return user;
     }
 
+    /**
+     * The super admin is untouchable from every endpoint — matched by the
+     * persistent flag AND the current .env id, so even renamed or historical
+     * copies of the account stay locked.
+     */
     private void guardSuperAdmin(User user) {
-        if (user.getPhone() != null && user.getPhone().equals(superAdminId)) {
+        boolean isSuper = user.isSuperAdmin()
+                || (user.getPhone() != null && user.getPhone().equals(superAdminId));
+        if (isSuper) {
             throw badRequest("This administrator account is system-managed and cannot be edited or deleted");
         }
     }
@@ -506,6 +523,18 @@ public class AdminController {
     }
 
     // ------------------------------- Stats --------------------------------
+
+    // ------------------------------ Sign-in activity ------------------------------
+
+    /** Last sign-in per side + the recent feed — the Login Management page. */
+    @GetMapping("/logins")
+    public Map<String, Object> loginActivity() {
+        Map<String, Object> out = new java.util.HashMap<>();
+        out.put("lastManagement", loginEventRepository.findFirstBySideOrderByAtDesc("MANAGEMENT").orElse(null));
+        out.put("lastCustomer", loginEventRepository.findFirstBySideOrderByAtDesc("CUSTOMER").orElse(null));
+        out.put("recent", loginEventRepository.findTop12ByOrderByAtDesc());
+        return out;
+    }
 
     // ------------------------------ Extra sales (walk-in counter) ------------------------------
 

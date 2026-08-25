@@ -33,6 +33,13 @@ public class User {
 
     private boolean active = true;
 
+    /**
+     * The one .env-managed administrator. Locked everywhere: no endpoint may
+     * edit, deactivate or delete this account — credentials change only via
+     * the .env file (synced at startup).
+     */
+    private boolean superAdmin = false;
+
     /** How this customer joined: PAGE = self-registered on the website, ADF = added by the farm. */
     private String signupSource;
 
@@ -41,6 +48,9 @@ public class User {
 
     /** Usual daily quantity per product (productId → qty); missing entries default to 1. */
     private java.util.Map<String, Double> preferredQuantities;
+
+    /** Stamped on every successful sign-in — the staff table's "Last sign-in". */
+    private Instant lastLoginAt;
 
     private Instant createdAt = Instant.now();
 }
