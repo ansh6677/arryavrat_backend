@@ -86,6 +86,7 @@ public class DataSeeder implements CommandLineRunner {
         admin.setRole("ADMIN");
         admin.setActive(true);
         admin.setPassword(passwordEncoder.encode(superAdminPass));
+        admin.setSuperAdmin(true);
         userRepository.save(admin);
         log.info("Super admin {} (login id: {})", isNew ? "created" : "synced from .env", superAdminId);
     }

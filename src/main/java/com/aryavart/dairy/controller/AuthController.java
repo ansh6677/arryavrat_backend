@@ -26,7 +26,12 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public AuthResponse login(@Valid @RequestBody LoginRequest request) {
-        return authService.login(request);
+    public AuthResponse login(@Valid @RequestBody LoginRequest request,
+                              jakarta.servlet.http.HttpServletRequest http) {
+        // Behind Render the client sits in X-Forwarded-For; locally it's the socket.
+        String forwarded = http.getHeader("X-Forwarded-For");
+        String ip = (forwarded != null && !forwarded.isBlank())
+                ? forwarded.split(",")[0].trim() : http.getRemoteAddr();
+        return authService.login(request, http.getHeader("User-Agent"), ip);
     }
 }
