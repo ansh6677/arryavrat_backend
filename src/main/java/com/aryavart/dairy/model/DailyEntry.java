@@ -28,6 +28,16 @@ public class DailyEntry {
     private double rate;        // rate per unit at the time of entry
     private double total;       // quantity * rate
 
+    /**
+     * True for an "old due" — pending khata from before this app (or a past
+     * cycle), entered as a lump amount. It has no product; quantity is 1 and
+     * rate/total both carry the amount. It stays unpaid and simply raises the
+     * customer's outstanding until normal payments clear it.
+     */
+    private boolean oldDue;
+    /** For old dues: the billing month (YYYY-MM) the amount belongs to. */
+    private String forPeriod;
+
     @Indexed
     private LocalDate entryDate;
 
