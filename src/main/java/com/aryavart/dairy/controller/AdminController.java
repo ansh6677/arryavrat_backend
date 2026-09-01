@@ -5,6 +5,7 @@ import com.aryavart.dairy.dto.CustomerRequest;
 import com.aryavart.dairy.dto.BulkEntryRequest;
 import com.aryavart.dairy.dto.DayDetail;
 import com.aryavart.dairy.dto.EntryRequest;
+import com.aryavart.dairy.dto.OldDueRequest;
 import com.aryavart.dairy.dto.PaymentRequest;
 import com.aryavart.dairy.dto.StaffRequest;
 import com.aryavart.dairy.dto.StatsResponse;
@@ -373,6 +374,70 @@ public class AdminController {
         payment.setNote(req.note());
         payment.setForPeriod(forPeriod);
         return paymentRepository.save(payment);
+    }
+
+    /**
+     * "Old due" — pending khata of a past month entered as a lump amount
+     * (e.g. January's Rs. 1500 for paneer still unpaid). It is stored as an
+     * UNPAID entry dated to that month, so it raises the outstanding, rolls
+     * into "previous balance" on later bills, and is cleared the normal way —
+     * by recording payments. It is never marked paid by itself.
+     */
+    @PostMapping("/entries/old-due")
+    public DailyEntry addOldDue(@RequestBody OldDueRequest req) {
+        if (req.customerId() == null || req.customerId().isBlank()) throw badRequest("Please select a customer");
+        if (req.amount() == null || req.amount() <= 0) throw badRequest("Amount must be greater than 0");
+        if (req.month() == null || req.month().isBlank()) throw badRequest("Please choose the month the due belongs to");
+
+        YearMonth cycle;
+        try {
+            cycle = YearMonth.parse(req.month().trim());
+        } catch (Exception e) {
+            throw badRequest("The old due month must look like 2026-01");
+        }
+        if (cycle.isAfter(YearMonth.now())) throw badRequest("The old due month cannot be in the future");
+
+        User customer = userRepository.findById(req.customerId())
+                .orElseThrow(() -> notFound("Customer not found"));
+
+        // Same double-tap protection as bulk entries: one tap, one due.
+        boolean lockTaken = false;
+        if (req.requestId() != null && !req.requestId().isBlank()) {
+            try {
+                processedRequestRepository.insert(new ProcessedRequest(req.requestId()));
+                lockTaken = true;
+            } catch (DuplicateKeyException e) {
+                return entryRepository.findFirstByCustomerIdAndOldDueTrueAndForPeriodOrderByCreatedAtDesc(
+                        customer.getId(), cycle.toString())
+                        .orElseThrow(() -> badRequest("This old due was already saved"));
+            }
+        }
+
+        try {
+            DailyEntry due = new DailyEntry();
+            due.setCustomerId(customer.getId());
+            due.setCustomerName(customer.getName());
+            due.setProductId(null);
+            due.setProductName("Old due — " + monthTitle(cycle));
+            due.setUnit("");
+            due.setQuantity(1);
+            due.setRate(BillingService.round2(req.amount()));
+            due.setTotal(BillingService.round2(req.amount()));
+            due.setEntryDate(cycle.atEndOfMonth());
+            due.setNote(req.note());
+            due.setPaid(false);
+            due.setOldDue(true);
+            due.setForPeriod(cycle.toString());
+            return entryRepository.save(due);
+        } catch (RuntimeException e) {
+            if (lockTaken) processedRequestRepository.deleteById(req.requestId());
+            throw e;
+        }
+    }
+
+    /** "2026-01" -> "Jan 2026" for the old-due line label. */
+    private static String monthTitle(YearMonth ym) {
+        return ym.format(java.time.format.DateTimeFormatter.ofPattern("MMM uuuu", java.util.Locale.ENGLISH));
     }
 
     @GetMapping("/payments")
