@@ -13,9 +13,11 @@ import com.aryavart.dairy.model.Expense;
 import com.aryavart.dairy.model.ExtraSale;
 import com.aryavart.dairy.model.LoginEvent;
 import com.aryavart.dairy.model.Payment;
+import com.aryavart.dairy.model.ProcessedRequest;
 import com.aryavart.dairy.model.Product;
 import com.aryavart.dairy.model.User;
 import com.aryavart.dairy.repository.DailyEntryRepository;
+import com.aryavart.dairy.repository.ProcessedRequestRepository;
 import com.aryavart.dairy.repository.ExpenseRepository;
 import com.aryavart.dairy.repository.ExtraSaleRepository;
 import com.aryavart.dairy.repository.LoginEventRepository;
@@ -25,6 +27,7 @@ import com.aryavart.dairy.repository.UserRepository;
 import com.aryavart.dairy.service.BillingService;
 import com.aryavart.dairy.service.StatsService;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -61,6 +64,7 @@ public class AdminController {
     private final ExpenseRepository expenseRepository;
     private final ExtraSaleRepository extraSaleRepository;
     private final LoginEventRepository loginEventRepository;
+    private final ProcessedRequestRepository processedRequestRepository;
     private final BillingService billingService;
     private final StatsService statsService;
     private final PasswordEncoder passwordEncoder;
@@ -72,9 +76,11 @@ public class AdminController {
                            DailyEntryRepository entryRepository, PaymentRepository paymentRepository,
                            ExpenseRepository expenseRepository, ExtraSaleRepository extraSaleRepository,
                            LoginEventRepository loginEventRepository,
+                           ProcessedRequestRepository processedRequestRepository,
                            BillingService billingService,
                            StatsService statsService, PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
+        this.processedRequestRepository = processedRequestRepository;
         this.extraSaleRepository = extraSaleRepository;
         this.loginEventRepository = loginEventRepository;
         this.productRepository = productRepository;
@@ -219,27 +225,52 @@ public class AdminController {
         User customer = userRepository.findById(req.customerId())
                 .orElseThrow(() -> notFound("Customer not found"));
 
-        int created = 0;
-        double totalAmount = 0;
-        for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
-            for (BulkEntryRequest.Item item : req.items()) {
-                if (item == null || item.productId() == null || item.productId().isBlank()) continue;
-                double qty = (item.quantity() != null) ? item.quantity() : 0;
-                if (qty <= 0) continue;
-                Product product = productRepository.findById(item.productId())
-                        .orElseThrow(() -> notFound("Product not found"));
-                DailyEntry entry = saveEntry(customer, product, qty, item.rate(), d,
-                        req.note(), Boolean.TRUE.equals(req.paid()), req.paymentMode());
-                created++;
-                totalAmount += entry.getTotal();
+        // Double-tap / retry protection: every save from the UI carries a unique
+        // requestId. The first request claims the id (unique _id insert); an
+        // accidental repeat of the same tap is answered without writing anything,
+        // so one tap can never become two sets of entries.
+        boolean lockTaken = false;
+        if (req.requestId() != null && !req.requestId().isBlank()) {
+            try {
+                processedRequestRepository.insert(new ProcessedRequest(req.requestId()));
+                lockTaken = true;
+            } catch (DuplicateKeyException e) {
+                return Map.of(
+                        "created", 0,
+                        "days", 0L,
+                        "totalAmount", 0.0,
+                        "duplicate", true);
             }
         }
-        if (created == 0) throw badRequest("Please set a quantity greater than 0 for at least one product");
 
-        return Map.of(
-                "created", created,
-                "days", dayCount,
-                "totalAmount", BillingService.round2(totalAmount));
+        try {
+            int created = 0;
+            double totalAmount = 0;
+            for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
+                for (BulkEntryRequest.Item item : req.items()) {
+                    if (item == null || item.productId() == null || item.productId().isBlank()) continue;
+                    double qty = (item.quantity() != null) ? item.quantity() : 0;
+                    if (qty <= 0) continue;
+                    Product product = productRepository.findById(item.productId())
+                            .orElseThrow(() -> notFound("Product not found"));
+                    DailyEntry entry = saveEntry(customer, product, qty, item.rate(), d,
+                            req.note(), Boolean.TRUE.equals(req.paid()), req.paymentMode());
+                    created++;
+                    totalAmount += entry.getTotal();
+                }
+            }
+            if (created == 0) throw badRequest("Please set a quantity greater than 0 for at least one product");
+
+            return Map.of(
+                    "created", created,
+                    "days", dayCount,
+                    "totalAmount", BillingService.round2(totalAmount),
+                    "duplicate", false);
+        } catch (RuntimeException e) {
+            // The save failed — release the id so the user can retry cleanly.
+            if (lockTaken) processedRequestRepository.deleteById(req.requestId());
+            throw e;
+        }
     }
 
     /** Shared by the single and bulk entry endpoints. */
@@ -315,13 +346,32 @@ public class AdminController {
         User customer = userRepository.findById(req.customerId())
                 .orElseThrow(() -> notFound("Customer not found"));
 
+        // "Old payment": money received today that clears an earlier billing
+        // month. The month is validated and kept on the record so every bill,
+        // table and export can show which cycle it belongs to.
+        String forPeriod = null;
+        if (req.forPeriod() != null && !req.forPeriod().isBlank()) {
+            YearMonth cycle;
+            try {
+                cycle = YearMonth.parse(req.forPeriod().trim());
+            } catch (Exception e) {
+                throw badRequest("The old payment month must look like 2026-07");
+            }
+            if (cycle.isAfter(YearMonth.now())) {
+                throw badRequest("The old payment month cannot be in the future");
+            }
+            forPeriod = cycle.toString();
+        }
+
         Payment payment = new Payment();
         payment.setCustomerId(customer.getId());
         payment.setCustomerName(customer.getName());
         payment.setAmount(BillingService.round2(req.amount()));
         payment.setPaymentDate(req.paymentDate() != null ? req.paymentDate() : LocalDate.now());
-        payment.setMode((req.mode() == null || req.mode().isBlank()) ? "Cash" : req.mode());
+        String defaultMode = (forPeriod != null) ? "Old dues" : "Cash";
+        payment.setMode((req.mode() == null || req.mode().isBlank()) ? defaultMode : req.mode());
         payment.setNote(req.note());
+        payment.setForPeriod(forPeriod);
         return paymentRepository.save(payment);
     }
 

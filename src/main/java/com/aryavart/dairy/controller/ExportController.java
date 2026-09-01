@@ -157,9 +157,10 @@ public class ExportController {
                     .toList()
                 : paymentRepository.findInRange(f, t);
         List<String> out = new ArrayList<>();
-        add(out, "Date", "Customer", "Amount", "Mode", "Note");
+        add(out, "Date", "Customer", "Amount", "Mode", "For period", "Note");
         for (Payment p : list) {
-            add(out, p.getPaymentDate(), p.getCustomerName(), p.getAmount(), p.getMode(), p.getNote());
+            add(out, p.getPaymentDate(), p.getCustomerName(), p.getAmount(), p.getMode(),
+                    p.getForPeriod() == null ? "" : p.getForPeriod(), p.getNote());
         }
         return csv("payments_" + f + "_to_" + t + ".csv", out);
     }

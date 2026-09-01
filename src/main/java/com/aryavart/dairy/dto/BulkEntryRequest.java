@@ -9,7 +9,9 @@ import java.util.List;
  */
 public record BulkEntryRequest(String customerId, LocalDate from, LocalDate to,
                                Boolean paid, String paymentMode, String note,
-                               List<Item> items) {
+                               List<Item> items,
+                               /** Client-generated id for this save tap — repeats are ignored. */
+                               String requestId) {
 
     public record Item(String productId, Double quantity, Double rate) {
     }
