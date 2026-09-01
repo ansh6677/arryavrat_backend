@@ -347,13 +347,32 @@ public class AdminController {
         User customer = userRepository.findById(req.customerId())
                 .orElseThrow(() -> notFound("Customer not found"));
 
+        // "Old payment": money received today that clears an earlier billing
+        // month. The month is validated and kept on the record so every bill,
+        // table and export can show which cycle it belongs to.
+        String forPeriod = null;
+        if (req.forPeriod() != null && !req.forPeriod().isBlank()) {
+            YearMonth cycle;
+            try {
+                cycle = YearMonth.parse(req.forPeriod().trim());
+            } catch (Exception e) {
+                throw badRequest("The old payment month must look like 2026-07");
+            }
+            if (cycle.isAfter(YearMonth.now())) {
+                throw badRequest("The old payment month cannot be in the future");
+            }
+            forPeriod = cycle.toString();
+        }
+
         Payment payment = new Payment();
         payment.setCustomerId(customer.getId());
         payment.setCustomerName(customer.getName());
         payment.setAmount(BillingService.round2(req.amount()));
         payment.setPaymentDate(req.paymentDate() != null ? req.paymentDate() : LocalDate.now());
-        payment.setMode((req.mode() == null || req.mode().isBlank()) ? "Cash" : req.mode());
+        String defaultMode = (forPeriod != null) ? "Old dues" : "Cash";
+        payment.setMode((req.mode() == null || req.mode().isBlank()) ? defaultMode : req.mode());
         payment.setNote(req.note());
+        payment.setForPeriod(forPeriod);
         return paymentRepository.save(payment);
     }
 
