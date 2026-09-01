@@ -14,6 +14,9 @@ public interface DailyEntryRepository extends MongoRepository<DailyEntry, String
 
     Optional<DailyEntry> findFirstByLinkedPaymentId(String linkedPaymentId);
 
+    /** The just-saved old due, returned again when a duplicate submit replays the same requestId. */
+    Optional<DailyEntry> findFirstByCustomerIdAndOldDueTrueAndForPeriodOrderByCreatedAtDesc(String customerId, String forPeriod);
+
     /**
      * Note: a derived "GreaterThanEqual...LessThanEqual" method on the SAME field
      * throws InvalidMongoDbApiUsageException, so the range is written as one $gte/$lte document.
