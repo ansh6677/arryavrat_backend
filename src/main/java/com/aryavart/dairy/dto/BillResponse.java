@@ -21,5 +21,11 @@ public record BillResponse(
         double lifetimePaid,
         /** Dues carried in from before this period: purchases minus payments up to the day before 'from'. */
         double previousBalance,
-        double outstanding) {
+        double outstanding,
+        /**
+         * UPI payments the customer has reported but staff have not verified yet.
+         * Deliberately NOT subtracted from `outstanding` — the customer sees
+         * "waiting for confirmation", the admin sees a Confirm button.
+         */
+        List<Payment> pendingClaims) {
 }

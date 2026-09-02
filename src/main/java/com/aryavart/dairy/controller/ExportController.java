@@ -150,12 +150,15 @@ public class ExportController {
                                            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         LocalDate f = orMonthStart(from);
         LocalDate t = orToday(to);
-        List<Payment> list = (customerId != null && !customerId.isBlank())
+        // Unverified customer claims are not money in the books, so they stay out
+        // of the payments export.
+        List<Payment> list = ((customerId != null && !customerId.isBlank())
                 ? paymentRepository.findByCustomerIdOrderByPaymentDateDesc(customerId).stream()
                     .filter(p -> p.getPaymentDate() != null
                             && !p.getPaymentDate().isBefore(f) && !p.getPaymentDate().isAfter(t))
                     .toList()
-                : paymentRepository.findInRange(f, t);
+                : paymentRepository.findInRange(f, t))
+                .stream().filter(Payment::isConfirmed).toList();
         List<String> out = new ArrayList<>();
         add(out, "Date", "Customer", "Amount", "Mode", "Note");
         for (Payment p : list) {

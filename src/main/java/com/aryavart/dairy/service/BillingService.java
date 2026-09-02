@@ -47,7 +47,12 @@ public class BillingService {
         double lifetimePurchases = entryRepository.findByCustomerIdOrderByEntryDateAsc(customerId)
                 .stream().mapToDouble(DailyEntry::getTotal).sum();
 
-        List<Payment> allPayments = paymentRepository.findByCustomerIdOrderByPaymentDateDesc(customerId);
+        // Only VERIFIED money moves the khata. A customer's own "Yes, paid" tap
+        // lands as PENDING and is reported separately, so nobody can clear their
+        // own outstanding without staff confirming the transfer.
+        List<Payment> everyPayment = paymentRepository.findByCustomerIdOrderByPaymentDateDesc(customerId);
+        List<Payment> allPayments = everyPayment.stream().filter(Payment::isConfirmed).toList();
+        List<Payment> pendingClaims = everyPayment.stream().filter(Payment::isPending).toList();
         double lifetimePaid = allPayments.stream().mapToDouble(Payment::getAmount).sum();
 
         final LocalDate f = from;
@@ -73,7 +78,8 @@ public class BillingService {
 
         return new BillResponse(customer.getId(), customer.getName(), customer.getPhone(), customer.getAddress(),
                 from, to, periodEntries, round2(periodTotal), periodPayments, round2(periodPaid),
-                round2(lifetimePurchases), round2(lifetimePaid), previousBalance, outstanding);
+                round2(lifetimePurchases), round2(lifetimePaid), previousBalance, outstanding,
+                pendingClaims);
     }
 
     public static double round2(double value) {

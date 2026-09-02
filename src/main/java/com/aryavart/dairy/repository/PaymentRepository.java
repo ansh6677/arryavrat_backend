@@ -15,4 +15,9 @@ public interface PaymentRepository extends MongoRepository<Payment, String> {
     @Query(value = "{ 'paymentDate': { '$gte': ?0, '$lte': ?1 } }",
            sort = "{ 'paymentDate': -1, 'createdAt': -1 }")
     List<Payment> findInRange(LocalDate from, LocalDate to);
+
+    /** Customer-claimed payments still waiting for staff to verify them. */
+    List<Payment> findByStatusOrderByCreatedAtDesc(String status);
+
+    List<Payment> findByCustomerIdAndStatusOrderByCreatedAtDesc(String customerId, String status);
 }
