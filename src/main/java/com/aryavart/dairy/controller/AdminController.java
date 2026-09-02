@@ -32,6 +32,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -43,6 +44,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.temporal.ChronoUnit;
@@ -373,6 +375,46 @@ public class AdminController {
         payment.setMode((req.mode() == null || req.mode().isBlank()) ? defaultMode : req.mode());
         payment.setNote(req.note());
         payment.setForPeriod(forPeriod);
+        return paymentRepository.save(payment);
+    }
+
+    /** Every customer-reported UPI payment still waiting for verification. */
+    @GetMapping("/payments/pending")
+    public List<Payment> pendingPayments() {
+        return paymentRepository.findByStatusOrderByCreatedAtDesc(Payment.PENDING);
+    }
+
+    /**
+     * Verify a customer's "I paid by UPI" claim. Until this runs the claim is
+     * invisible to the khata maths; after it, the amount behaves exactly like a
+     * staff-entered payment and the outstanding drops.
+     *
+     * Rejecting a claim needs no new endpoint — DELETE /payments/{id} already
+     * removes it.
+     */
+    @PostMapping("/payments/{id}/confirm")
+    public Payment confirmPayment(@PathVariable String id,
+                                  @RequestBody(required = false) PaymentRequest req,
+                                  Authentication auth) {
+        Payment payment = paymentRepository.findById(id)
+                .orElseThrow(() -> notFound("Payment not found"));
+        if (payment.isConfirmed()) return payment;
+
+        // Staff can correct the amount/date while confirming — the customer may
+        // have typed the wrong figure, or paid only part of the due.
+        if (req != null) {
+            if (req.amount() != null) {
+                if (req.amount() <= 0) throw badRequest("Amount must be greater than 0");
+                payment.setAmount(BillingService.round2(req.amount()));
+            }
+            if (req.paymentDate() != null) payment.setPaymentDate(req.paymentDate());
+            if (req.mode() != null && !req.mode().isBlank()) payment.setMode(req.mode());
+            if (req.note() != null && !req.note().isBlank()) payment.setNote(req.note());
+        }
+
+        payment.setStatus(Payment.CONFIRMED);
+        payment.setConfirmedBy(auth != null ? auth.getName() : null);
+        payment.setConfirmedAt(Instant.now());
         return paymentRepository.save(payment);
     }
 

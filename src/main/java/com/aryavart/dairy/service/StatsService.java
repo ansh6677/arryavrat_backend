@@ -80,7 +80,10 @@ public class StatsService {
         LocalDate monthEnd = month.equals(thisMonth) ? today : month.atEndOfMonth();
 
         List<DailyEntry> allEntries = entryRepository.findAll();
-        List<Payment> allPayments = paymentRepository.findAll();
+        // Confirmed money only — a customer's unverified "I paid by UPI" claim
+        // must not show up as collected cash in the overview.
+        List<Payment> allPayments = paymentRepository.findAll().stream()
+                .filter(Payment::isConfirmed).toList();
         List<Expense> allExpenses = expenseRepository.findAll();
         List<ExtraSale> allExtra = extraSaleRepository.findAll();
 

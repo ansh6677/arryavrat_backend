@@ -1,5 +1,6 @@
 package com.aryavart.dairy.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
@@ -12,6 +13,15 @@ import java.time.LocalDate;
 @Data
 @Document("payments")
 public class Payment {
+
+    /** Money the farm has actually verified — counts towards the khata. */
+    public static final String CONFIRMED = "CONFIRMED";
+    /**
+     * A customer tapped "Yes, paid" on the UPI sheet. It is NOT counted in the
+     * khata until an admin confirms it, otherwise anyone could clear their own
+     * outstanding with one tap.
+     */
+    public static final String PENDING = "PENDING";
 
     @Id
     private String id;
@@ -32,5 +42,30 @@ public class Payment {
      */
     private String forPeriod;
 
+    /**
+     * CONFIRMED or PENDING. Payments written before this field existed have it
+     * null, which {@link #isConfirmed()} reads as CONFIRMED — the old rows were
+     * all staff-entered, so nothing in an existing khata shifts.
+     */
+    @Indexed
+    private String status;
+
+    /** UPI reference / UTR the customer typed while claiming the payment. */
+    private String claimedRef;
+
+    /** Who confirmed a PENDING claim, and when. */
+    private String confirmedBy;
+    private Instant confirmedAt;
+
     private Instant createdAt = Instant.now();
+
+    @JsonIgnore
+    public boolean isConfirmed() {
+        return status == null || CONFIRMED.equals(status);
+    }
+
+    @JsonIgnore
+    public boolean isPending() {
+        return PENDING.equals(status);
+    }
 }
