@@ -43,6 +43,7 @@ public class BillingService {
                 .findForCustomerInRange(
                         customerId, from, to);
         double periodTotal = periodEntries.stream().mapToDouble(DailyEntry::getTotal).sum();
+        double periodDiscount = periodEntries.stream().mapToDouble(DailyEntry::getDiscountAmount).sum();
 
         double lifetimePurchases = entryRepository.findByCustomerIdOrderByEntryDateAsc(customerId)
                 .stream().mapToDouble(DailyEntry::getTotal).sum();
@@ -77,7 +78,8 @@ public class BillingService {
         double previousBalance = round2(prevPurchases - prevPaid);
 
         return new BillResponse(customer.getId(), customer.getName(), customer.getPhone(), customer.getAddress(),
-                from, to, periodEntries, round2(periodTotal), periodPayments, round2(periodPaid),
+                from, to, periodEntries, round2(periodTotal), round2(periodDiscount),
+                periodPayments, round2(periodPaid),
                 round2(lifetimePurchases), round2(lifetimePaid), previousBalance, outstanding,
                 pendingClaims);
     }

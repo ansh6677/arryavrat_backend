@@ -27,5 +27,18 @@ public class Product {
     /** Display position on the website and slider — lower comes first. */
     private int sortOrder = 100;
 
+    /**
+     * Sellable pack sizes. Null or empty means the product is sold by the unit
+     * at {@link #price}, exactly as everything did before packs existed — which
+     * is why adding this field changes nothing for milk, curd or anything else
+     * until packs are actually set on it.
+     */
+    private java.util.List<ProductVariant> variants;
+
+    /** True when this product is sold in packs rather than by loose quantity. */
+    public boolean packed() {
+        return variants != null && !variants.isEmpty();
+    }
+
     private Instant createdAt = Instant.now();
 }

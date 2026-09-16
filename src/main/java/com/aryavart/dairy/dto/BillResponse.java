@@ -15,6 +15,8 @@ public record BillResponse(
         LocalDate to,
         List<DailyEntry> entries,
         double periodTotal,
+        /** Total knocked off this period's entries by coupons. 0 when none were used. */
+        double periodDiscount,
         List<Payment> payments,
         double periodPaid,
         double lifetimePurchases,
