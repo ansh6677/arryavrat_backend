@@ -96,11 +96,40 @@ public class StatsService {
 
         double todayExtraSales = 0;
         double monthExtraSales = 0;
+        // Cash vs online, for today / the selected month / all time. Counter
+        // sales are folded in here too: the farm cares how much cash is in the
+        // drawer, not which table the row happens to live in.
+        double todayCashIn = 0, todayOnlineIn = 0;
+        double monthCashIn = 0, monthOnlineIn = 0;
+        double totalCashIn = 0, totalOnlineIn = 0;
+
         for (ExtraSale x : allExtra) {
             LocalDate d = x.getSaleDate();
             if (d == null) continue;
             if (today.equals(d)) todayExtraSales += x.getTotal();
             if (!d.isBefore(monthStart) && !d.isAfter(monthEnd)) monthExtraSales += x.getTotal();
+
+            boolean cash = isCash(x.getPaymentMode());
+            if (cash) totalCashIn += x.getTotal(); else totalOnlineIn += x.getTotal();
+            if (today.equals(d)) {
+                if (cash) todayCashIn += x.getTotal(); else todayOnlineIn += x.getTotal();
+            }
+            if (!d.isBefore(monthStart) && !d.isAfter(monthEnd)) {
+                if (cash) monthCashIn += x.getTotal(); else monthOnlineIn += x.getTotal();
+            }
+        }
+
+        for (Payment pay : allPayments) {
+            LocalDate d = pay.getPaymentDate();
+            if (d == null) continue;
+            boolean cash = isCash(pay.getMode());
+            if (cash) totalCashIn += pay.getAmount(); else totalOnlineIn += pay.getAmount();
+            if (today.equals(d)) {
+                if (cash) todayCashIn += pay.getAmount(); else todayOnlineIn += pay.getAmount();
+            }
+            if (!d.isBefore(monthStart) && !d.isAfter(monthEnd)) {
+                if (cash) monthCashIn += pay.getAmount(); else monthOnlineIn += pay.getAmount();
+            }
         }
 
         double todaySales = 0;
@@ -228,6 +257,12 @@ public class StatsService {
                 BillingService.round2(monthExtraSales),
                 BillingService.round2(totalExtraSales),
                 BillingService.round2(totalPaid),
+                BillingService.round2(todayCashIn),
+                BillingService.round2(todayOnlineIn),
+                BillingService.round2(monthCashIn),
+                BillingService.round2(monthOnlineIn),
+                BillingService.round2(totalCashIn),
+                BillingService.round2(totalOnlineIn),
                 BillingService.round2(totalSales - totalPaid),
                 BillingService.round2(todayExpenses),
                 BillingService.round2(monthExpenses),
@@ -240,6 +275,17 @@ public class StatsService {
                 days,
                 monthly,
                 months);
+    }
+
+    /**
+     * Cash is the default for anything unlabelled — every row written before
+     * modes were recorded was a hand-to-hand payment, so reading a blank as
+     * cash keeps the historical split honest rather than inventing UPI.
+     */
+    static boolean isCash(String mode) {
+        if (mode == null || mode.isBlank()) return true;
+        String m = mode.trim().toLowerCase();
+        return m.equals("cash") || m.equals("offline");
     }
 
     /** Full breakdown for a single day — shown when a chart bar is clicked. */
