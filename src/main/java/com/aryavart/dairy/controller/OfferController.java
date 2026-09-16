@@ -96,6 +96,8 @@ public class OfferController {
         if (pct <= 0) throw bad("The discount must be greater than 0%");
         if (pct > 90) throw bad("The discount cannot be more than 90%");
 
+        if (req.getMinOrderAmount() < 0) throw bad("The minimum order amount cannot be negative");
+
         if (req.getValidFrom() != null && req.getValidTo() != null
                 && req.getValidTo().isBefore(req.getValidFrom())) {
             throw bad("The end date cannot be before the start date");
@@ -110,6 +112,7 @@ public class OfferController {
         target.setDescription(req.getDescription() == null || req.getDescription().isBlank()
                 ? null : req.getDescription().trim());
         target.setPercentOff(round2(pct));
+        target.setMinOrderAmount(round2(Math.max(0, req.getMinOrderAmount())));
         target.setScope(normalizeScope(req.getScope()));
         target.setActive(req.isActive());
         target.setShowOnSite(req.isShowOnSite());

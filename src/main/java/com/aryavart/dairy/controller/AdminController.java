@@ -2,6 +2,7 @@ package com.aryavart.dairy.controller;
 
 import com.aryavart.dairy.dto.BillResponse;
 import com.aryavart.dairy.dto.CustomerRequest;
+import com.aryavart.dairy.dto.BreakdownResponse;
 import com.aryavart.dairy.dto.BulkEntryRequest;
 import com.aryavart.dairy.dto.DayDetail;
 import com.aryavart.dairy.dto.EntryRequest;
@@ -183,8 +184,10 @@ public class AdminController {
                 .orElseThrow(() -> notFound("Product not found"));
 
         // An unusable code stops the save with its own message rather than
-        // quietly writing the entry at full price.
-        Offer offer = offerService.resolve(req.couponCode(), Offer.KHATA);
+        // quietly writing the entry at full price. The total goes in too, so a
+        // coupon with a minimum can be judged before anything is written.
+        double gross = grossFor(product, req.quantity(), req.rate(), req.packLabel());
+        Offer offer = offerService.resolve(req.couponCode(), Offer.KHATA, gross);
 
         DailyEntry entry = saveEntry(customer, product, req.quantity(), req.rate(), req.packLabel(),
                 req.entryDate(), req.note(), Boolean.TRUE.equals(req.paid()), req.paymentMode(), offer);
@@ -210,9 +213,32 @@ public class AdminController {
         User customer = userRepository.findById(req.customerId())
                 .orElseThrow(() -> notFound("Customer not found"));
 
-        // Resolved once, before the idempotency lock is taken: a bad code should
-        // fail cleanly and leave the requestId free for the corrected retry.
-        Offer offer = offerService.resolve(req.couponCode(), Offer.KHATA);
+        // Products are fetched once and reused: the save touches every product on
+        // every day in the range, and this is also what makes the dry pass below
+        // cheap rather than a second round of lookups.
+        Map<String, Product> productCache = new java.util.HashMap<>();
+        for (BulkEntryRequest.Item item : req.items()) {
+            if (item == null || item.productId() == null || item.productId().isBlank()) continue;
+            productCache.computeIfAbsent(item.productId(), id -> productRepository.findById(id)
+                    .orElseThrow(() -> notFound("Product not found")));
+        }
+
+        // Dry pass: what will this save come to? Needed before the coupon is
+        // resolved, because a minimum-order coupon has to be judged against the
+        // real total — and judged before the first entry hits the database.
+        double expectedGross = 0;
+        long days = java.time.temporal.ChronoUnit.DAYS.between(from, to) + 1;
+        for (BulkEntryRequest.Item item : req.items()) {
+            if (item == null || item.productId() == null || item.productId().isBlank()) continue;
+            double qty = (item.quantity() != null) ? item.quantity() : 0;
+            if (qty <= 0) continue;
+            expectedGross += grossFor(productCache.get(item.productId()), qty, item.rate(), item.packLabel()) * days;
+        }
+
+        // Resolved before the idempotency lock is taken: a bad code should fail
+        // cleanly and leave the requestId free for the corrected retry.
+        Offer offer = offerService.resolve(req.couponCode(), Offer.KHATA,
+                BillingService.round2(expectedGross));
 
         // Double-tap / retry protection: every save from the UI carries a unique
         // requestId. The first request claims the id (unique _id insert); an
@@ -241,8 +267,7 @@ public class AdminController {
                     if (item == null || item.productId() == null || item.productId().isBlank()) continue;
                     double qty = (item.quantity() != null) ? item.quantity() : 0;
                     if (qty <= 0) continue;
-                    Product product = productRepository.findById(item.productId())
-                            .orElseThrow(() -> notFound("Product not found"));
+                    Product product = productCache.get(item.productId());
                     DailyEntry entry = saveEntry(customer, product, qty, item.rate(), item.packLabel(), d,
                             req.note(), Boolean.TRUE.equals(req.paid()), req.paymentMode(), offer);
                     created++;
@@ -351,6 +376,35 @@ public class AdminController {
         return entryRepository
                 .findForCustomerInRange(
                         customerId, f, t);
+    }
+
+    /**
+     * Deletes several entries in one go, for the checkbox selection on a bill.
+     *
+     * Missing ids are skipped rather than failing the batch: the usual way to
+     * hit one is a stale page where someone else already deleted that row, and
+     * refusing the whole request would just make the user try again blind.
+     */
+    @PostMapping("/entries/delete-bulk")
+    public Map<String, Object> deleteEntries(@RequestBody Map<String, List<String>> body) {
+        List<String> ids = body == null ? null : body.get("ids");
+        if (ids == null || ids.isEmpty()) throw badRequest("Select at least one entry to delete");
+        if (ids.size() > 500) throw badRequest("Please delete 500 entries or fewer at a time");
+
+        int deleted = 0;
+        double amount = 0;
+        for (String id : ids) {
+            DailyEntry entry = entryRepository.findById(id).orElse(null);
+            if (entry == null) continue;
+            // A paid entry carries its auto-payment with it, so totals stay correct.
+            if (entry.getLinkedPaymentId() != null && paymentRepository.existsById(entry.getLinkedPaymentId())) {
+                paymentRepository.deleteById(entry.getLinkedPaymentId());
+            }
+            entryRepository.deleteById(id);
+            deleted++;
+            amount += entry.getTotal();
+        }
+        return Map.of("deleted", deleted, "amount", BillingService.round2(amount));
     }
 
     @DeleteMapping("/entries/{id}")
@@ -619,6 +673,18 @@ public class AdminController {
         return Map.of("status", "deleted");
     }
 
+    /**
+     * What a line comes to before any discount. Split out so the coupon's
+     * minimum can be tested against a real total before anything is written —
+     * saving first and validating after would leave entries behind on failure.
+     */
+    private double grossFor(Product product, double quantity, Double rateOverride, String packLabel) {
+        ProductVariant pack = findPack(product, packLabel);
+        if (pack != null) return BillingService.round2(quantity * pack.getPrice());
+        double rate = (rateOverride != null && rateOverride > 0) ? rateOverride : product.getPrice();
+        return BillingService.round2(quantity * rate);
+    }
+
     /** The named pack on this product, or null when the sale is loose quantity. */
     private ProductVariant findPack(Product product, String packLabel) {
         if (packLabel == null || packLabel.isBlank()) return null;
@@ -869,6 +935,24 @@ public class AdminController {
     }
 
     /** Sales and expenses for a single day — opens when a chart bar is clicked. */
+    /**
+     * Who is behind a dashboard figure. type is CASH, ONLINE or OUTSTANDING;
+     * month is ignored for OUTSTANDING, which is always all-time.
+     */
+    @GetMapping("/stats/breakdown")
+    public BreakdownResponse statsBreakdown(@RequestParam String type,
+                                            @RequestParam(required = false) String month) {
+        YearMonth ym = null;
+        if (month != null && !month.isBlank()) {
+            try {
+                ym = YearMonth.parse(month);
+            } catch (RuntimeException e) {
+                throw badRequest("Month must look like 2026-09");
+            }
+        }
+        return statsService.breakdown(type, ym);
+    }
+
     @GetMapping("/stats/day")
     public DayDetail statsDay(@RequestParam
                               @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {

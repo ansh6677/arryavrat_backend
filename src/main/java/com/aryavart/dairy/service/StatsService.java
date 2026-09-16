@@ -1,5 +1,6 @@
 package com.aryavart.dairy.service;
 
+import com.aryavart.dairy.dto.BreakdownResponse;
 import com.aryavart.dairy.dto.DayDetail;
 import com.aryavart.dairy.dto.StatsResponse;
 import com.aryavart.dairy.dto.StatsResponse.DatePoint;
@@ -10,6 +11,7 @@ import com.aryavart.dairy.model.DailyEntry;
 import com.aryavart.dairy.model.Expense;
 import com.aryavart.dairy.model.ExtraSale;
 import com.aryavart.dairy.model.Payment;
+import com.aryavart.dairy.model.User;
 import com.aryavart.dairy.repository.DailyEntryRepository;
 import com.aryavart.dairy.repository.ExpenseRepository;
 import com.aryavart.dairy.repository.ExtraSaleRepository;
@@ -286,6 +288,104 @@ public class StatsService {
         if (mode == null || mode.isBlank()) return true;
         String m = mode.trim().toLowerCase();
         return m.equals("cash") || m.equals("offline");
+    }
+
+    /**
+     * Who makes up one dashboard figure.
+     *
+     * Deliberately rebuilt from the same repositories and the same rules as
+     * {@link #overview}: cash counts counter sales, a blank payment mode reads
+     * as cash, and only confirmed payments count. Sharing the rules is what
+     * keeps the rows adding up to the card.
+     */
+    public BreakdownResponse breakdown(String type, YearMonth selected) {
+        String kind = (type == null ? "" : type.trim().toUpperCase());
+        LocalDate today = LocalDate.now();
+        YearMonth thisMonth = YearMonth.from(today);
+        YearMonth month = (selected != null) ? selected : thisMonth;
+        LocalDate monthStart = month.atDay(1);
+        LocalDate monthEnd = month.equals(thisMonth) ? today : month.atEndOfMonth();
+        String monthName = month.atDay(1).format(MONTH_LONG);
+
+        Map<String, String> names = userRepository.findByRoleOrderByNameAsc("CUSTOMER").stream()
+                .collect(Collectors.toMap(User::getId, User::getName, (a, b) -> a));
+
+        if ("OUTSTANDING".equals(kind)) {
+            // Entries minus confirmed payments, per customer. Counter sales are
+            // absent on purpose: they are paid on the spot and cancel out of the
+            // dashboard's own outstanding figure too.
+            Map<String, Double> owed = new java.util.HashMap<>();
+            Map<String, Integer> counts = new java.util.HashMap<>();
+            for (DailyEntry e : entryRepository.findAll()) {
+                if (e.getCustomerId() == null) continue;
+                owed.merge(e.getCustomerId(), e.getTotal(), Double::sum);
+                counts.merge(e.getCustomerId(), 1, Integer::sum);
+            }
+            for (Payment pay : paymentRepository.findAll()) {
+                if (!pay.isConfirmed() || pay.getCustomerId() == null) continue;
+                owed.merge(pay.getCustomerId(), -pay.getAmount(), Double::sum);
+            }
+
+            List<BreakdownResponse.Row> rows = owed.entrySet().stream()
+                    .filter(en -> BillingService.round2(en.getValue()) > 0)
+                    .map(en -> new BreakdownResponse.Row(
+                            en.getKey(),
+                            names.getOrDefault(en.getKey(), "Deleted customer"),
+                            BillingService.round2(en.getValue()),
+                            counts.getOrDefault(en.getKey(), 0) + " entries"))
+                    .sorted(Comparator.comparingDouble(BreakdownResponse.Row::amount).reversed())
+                    .toList();
+            double total = rows.stream().mapToDouble(BreakdownResponse.Row::amount).sum();
+            return new BreakdownResponse("OUTSTANDING", "Total outstanding",
+                    rows.size() + (rows.size() == 1 ? " customer owes money" : " customers owe money"),
+                    BillingService.round2(total), rows);
+        }
+
+        boolean wantCash = "CASH".equals(kind);
+        Map<String, Double> paid = new java.util.HashMap<>();
+        Map<String, Integer> counts = new java.util.HashMap<>();
+        for (Payment pay : paymentRepository.findAll()) {
+            LocalDate d = pay.getPaymentDate();
+            if (!pay.isConfirmed() || d == null || pay.getCustomerId() == null) continue;
+            if (d.isBefore(monthStart) || d.isAfter(monthEnd)) continue;
+            if (isCash(pay.getMode()) != wantCash) continue;
+            paid.merge(pay.getCustomerId(), pay.getAmount(), Double::sum);
+            counts.merge(pay.getCustomerId(), 1, Integer::sum);
+        }
+
+        List<BreakdownResponse.Row> rows = new ArrayList<>(paid.entrySet().stream()
+                .map(en -> new BreakdownResponse.Row(
+                        en.getKey(),
+                        names.getOrDefault(en.getKey(), "Deleted customer"),
+                        BillingService.round2(en.getValue()),
+                        counts.getOrDefault(en.getKey(), 0)
+                                + (counts.getOrDefault(en.getKey(), 0) == 1 ? " payment" : " payments")))
+                .sorted(Comparator.comparingDouble(BreakdownResponse.Row::amount).reversed())
+                .toList());
+
+        // Counter sales have no khata customer but are real money in the same
+        // bucket, so they get their own unlinked row rather than being dropped —
+        // without it the rows would not add up to the card.
+        double counter = 0;
+        int counterCount = 0;
+        for (ExtraSale x : extraSaleRepository.findAll()) {
+            LocalDate d = x.getSaleDate();
+            if (d == null || d.isBefore(monthStart) || d.isAfter(monthEnd)) continue;
+            if (isCash(x.getPaymentMode()) != wantCash) continue;
+            counter += x.getTotal();
+            counterCount++;
+        }
+        if (counterCount > 0) {
+            rows.add(new BreakdownResponse.Row(null, "Counter sales (walk-in)",
+                    BillingService.round2(counter),
+                    counterCount + (counterCount == 1 ? " sale" : " sales")));
+        }
+
+        double total = rows.stream().mapToDouble(BreakdownResponse.Row::amount).sum();
+        return new BreakdownResponse(wantCash ? "CASH" : "ONLINE",
+                monthName + (wantCash ? " cash collected" : " online collected"),
+                wantCash ? "Hand-to-hand, counter sales included" : "UPI, bank transfer and other",
+                BillingService.round2(total), rows);
     }
 
     /** Full breakdown for a single day — shown when a chart bar is clicked. */

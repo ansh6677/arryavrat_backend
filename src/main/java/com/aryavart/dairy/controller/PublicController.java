@@ -96,14 +96,15 @@ public class PublicController {
         }
         Offer offer;
         try {
-            offer = offerService.resolve(typed, Offer.WEBSITE);
+            offer = offerService.resolve(typed, Offer.WEBSITE,
+                    (amount == null || amount < 0) ? null : amount);
         } catch (ResponseStatusException e) {
             return CouponPreview.rejected(typed, e.getReason());
         }
         double base = (amount == null || amount < 0) ? 0 : BillingService.round2(amount);
         double discount = OfferService.discountOn(base, offer);
         return new CouponPreview(true, offer.getCode(), offer.getTitle(), offer.getDescription(),
-                offer.getPercentOff(), base, discount, BillingService.round2(base - discount),
+                offer.getPercentOff(), offer.getMinOrderAmount(), base, discount, BillingService.round2(base - discount),
                 "Coupon applied — you save ₹" + discount + ".");
     }
 

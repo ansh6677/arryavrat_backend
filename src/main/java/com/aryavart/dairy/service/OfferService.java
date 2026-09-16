@@ -59,6 +59,14 @@ public class OfferService {
      *         an unusable code raises 400 with a message meant to be shown as-is.
      */
     public Offer resolve(String rawCode, String scope) {
+        return resolve(rawCode, scope, null);
+    }
+
+    /**
+     * @param amount order/entry total before discount, for the minimum check.
+     *               Null skips that check — used where the total isn't known yet.
+     */
+    public Offer resolve(String rawCode, String scope, Double amount) {
         String code = normalize(rawCode);
         if (code == null) return null;
 
@@ -80,6 +88,11 @@ public class OfferService {
                     ? "This coupon is for website orders only."
                     : "This coupon can only be used on your monthly khata.");
         }
+        if (offer.getMinOrderAmount() > 0 && amount != null && amount < offer.getMinOrderAmount()) {
+            double short_ = BillingService.round2(offer.getMinOrderAmount() - amount);
+            throw bad("This coupon needs an order of \u20b9" + trim(offer.getMinOrderAmount())
+                    + " or more. Add \u20b9" + trim(short_) + " more to use it.");
+        }
         return offer;
     }
 
@@ -92,6 +105,11 @@ public class OfferService {
         } catch (RuntimeException ignored) {
             // A counter is not worth failing an order or an entry over.
         }
+    }
+
+    /** "500" reads better than "500.0" in a message the customer sees. */
+    private static String trim(double v) {
+        return (v == Math.floor(v)) ? String.valueOf((long) v) : String.valueOf(BillingService.round2(v));
     }
 
     private static ResponseStatusException bad(String message) {

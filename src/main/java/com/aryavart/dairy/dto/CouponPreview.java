@@ -13,6 +13,8 @@ public record CouponPreview(
         String title,
         String description,
         double percentOff,
+        /** Order total the code needs; 0 when there is none. */
+        double minOrderAmount,
         /** The amount the discount was worked out on. */
         double amount,
         double discount,
@@ -22,6 +24,6 @@ public record CouponPreview(
         String message) {
 
     public static CouponPreview rejected(String code, String message) {
-        return new CouponPreview(false, code, null, null, 0, 0, 0, 0, message);
+        return new CouponPreview(false, code, null, null, 0, 0, 0, 0, 0, message);
     }
 }

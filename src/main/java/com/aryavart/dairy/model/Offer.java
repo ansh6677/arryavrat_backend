@@ -43,6 +43,15 @@ public class Offer {
     /** 1–90. Taken off the whole order / entry total. */
     private double percentOff;
 
+    /**
+     * Order total the code needs before it works. 0 means no minimum.
+     *
+     * Checked against the total *before* the discount, which is the only order
+     * that makes sense: a coupon that drops the bill under its own minimum and
+     * so stops applying would flicker on and off as the customer shops.
+     */
+    private double minOrderAmount;
+
     /** WEBSITE | KHATA | BOTH */
     private String scope = BOTH;
 
