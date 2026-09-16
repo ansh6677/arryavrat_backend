@@ -15,6 +15,18 @@ public record StatsResponse(
         double monthExtraSales,
         double totalExtraSales,
         double totalPaymentsReceived,
+        /**
+         * Money actually collected, split by how it came in. "Cash" is anything
+         * handed over in person; "online" is UPI, bank transfer and anything
+         * else. Walk-in counter sales are included, because they are real money
+         * in the drawer even though they never touch a customer's khata.
+         */
+        double todayCashIn,
+        double todayOnlineIn,
+        double monthCashIn,
+        double monthOnlineIn,
+        double totalCashIn,
+        double totalOnlineIn,
         double totalOutstanding,
         double todayExpenses,
         double monthExpenses,

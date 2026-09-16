@@ -13,9 +13,11 @@ import com.aryavart.dairy.model.DailyEntry;
 import com.aryavart.dairy.model.Expense;
 import com.aryavart.dairy.model.ExtraSale;
 import com.aryavart.dairy.model.LoginEvent;
+import com.aryavart.dairy.model.Offer;
 import com.aryavart.dairy.model.Payment;
 import com.aryavart.dairy.model.ProcessedRequest;
 import com.aryavart.dairy.model.Product;
+import com.aryavart.dairy.model.ProductVariant;
 import com.aryavart.dairy.model.User;
 import com.aryavart.dairy.repository.DailyEntryRepository;
 import com.aryavart.dairy.repository.ProcessedRequestRepository;
@@ -26,6 +28,7 @@ import com.aryavart.dairy.repository.PaymentRepository;
 import com.aryavart.dairy.repository.ProductRepository;
 import com.aryavart.dairy.repository.UserRepository;
 import com.aryavart.dairy.service.BillingService;
+import com.aryavart.dairy.service.OfferService;
 import com.aryavart.dairy.service.StatsService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
@@ -70,6 +73,7 @@ public class AdminController {
     private final ProcessedRequestRepository processedRequestRepository;
     private final BillingService billingService;
     private final StatsService statsService;
+    private final OfferService offerService;
     private final PasswordEncoder passwordEncoder;
 
     @Value("${app.seed.super-admin-id}")
@@ -81,7 +85,9 @@ public class AdminController {
                            LoginEventRepository loginEventRepository,
                            ProcessedRequestRepository processedRequestRepository,
                            BillingService billingService,
-                           StatsService statsService, PasswordEncoder passwordEncoder) {
+                           StatsService statsService, OfferService offerService,
+                           PasswordEncoder passwordEncoder) {
+        this.offerService = offerService;
         this.userRepository = userRepository;
         this.processedRequestRepository = processedRequestRepository;
         this.extraSaleRepository = extraSaleRepository;
@@ -176,37 +182,13 @@ public class AdminController {
         Product product = productRepository.findById(req.productId())
                 .orElseThrow(() -> notFound("Product not found"));
 
-        double rate = (req.rate() != null && req.rate() > 0) ? req.rate() : product.getPrice();
+        // An unusable code stops the save with its own message rather than
+        // quietly writing the entry at full price.
+        Offer offer = offerService.resolve(req.couponCode(), Offer.KHATA);
 
-        DailyEntry entry = new DailyEntry();
-        entry.setCustomerId(customer.getId());
-        entry.setCustomerName(customer.getName());
-        entry.setProductId(product.getId());
-        entry.setProductName(product.getName());
-        entry.setUnit(product.getUnit());
-        entry.setQuantity(req.quantity());
-        entry.setRate(rate);
-        entry.setTotal(BillingService.round2(req.quantity() * rate));
-        entry.setEntryDate(req.entryDate() != null ? req.entryDate() : LocalDate.now());
-        entry.setNote(req.note());
-        entry = entryRepository.save(entry);
-
-        // "Paid" entry: record the matching payment immediately so the ledger,
-        // dashboard and outstanding all stay consistent automatically.
-        if (Boolean.TRUE.equals(req.paid())) {
-            Payment payment = new Payment();
-            payment.setCustomerId(customer.getId());
-            payment.setCustomerName(customer.getName());
-            payment.setAmount(entry.getTotal());
-            payment.setPaymentDate(entry.getEntryDate());
-            payment.setMode((req.paymentMode() == null || req.paymentMode().isBlank()) ? "Cash" : req.paymentMode());
-            payment.setNote("Paid with entry — " + product.getName());
-            payment = paymentRepository.save(payment);
-
-            entry.setPaid(true);
-            entry.setLinkedPaymentId(payment.getId());
-            entry = entryRepository.save(entry);
-        }
+        DailyEntry entry = saveEntry(customer, product, req.quantity(), req.rate(), req.packLabel(),
+                req.entryDate(), req.note(), Boolean.TRUE.equals(req.paid()), req.paymentMode(), offer);
+        offerService.markUsed(offer);
         return entry;
     }
 
@@ -227,6 +209,10 @@ public class AdminController {
 
         User customer = userRepository.findById(req.customerId())
                 .orElseThrow(() -> notFound("Customer not found"));
+
+        // Resolved once, before the idempotency lock is taken: a bad code should
+        // fail cleanly and leave the requestId free for the corrected retry.
+        Offer offer = offerService.resolve(req.couponCode(), Offer.KHATA);
 
         // Double-tap / retry protection: every save from the UI carries a unique
         // requestId. The first request claims the id (unique _id insert); an
@@ -249,6 +235,7 @@ public class AdminController {
         try {
             int created = 0;
             double totalAmount = 0;
+            double totalDiscount = 0;
             for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
                 for (BulkEntryRequest.Item item : req.items()) {
                     if (item == null || item.productId() == null || item.productId().isBlank()) continue;
@@ -256,19 +243,24 @@ public class AdminController {
                     if (qty <= 0) continue;
                     Product product = productRepository.findById(item.productId())
                             .orElseThrow(() -> notFound("Product not found"));
-                    DailyEntry entry = saveEntry(customer, product, qty, item.rate(), d,
-                            req.note(), Boolean.TRUE.equals(req.paid()), req.paymentMode());
+                    DailyEntry entry = saveEntry(customer, product, qty, item.rate(), item.packLabel(), d,
+                            req.note(), Boolean.TRUE.equals(req.paid()), req.paymentMode(), offer);
                     created++;
                     totalAmount += entry.getTotal();
+                    totalDiscount += entry.getDiscountAmount();
                 }
             }
             if (created == 0) throw badRequest("Please set a quantity greater than 0 for at least one product");
+            offerService.markUsed(offer);
 
-            return Map.of(
-                    "created", created,
-                    "days", dayCount,
-                    "totalAmount", BillingService.round2(totalAmount),
-                    "duplicate", false);
+            Map<String, Object> out = new java.util.HashMap<>();
+            out.put("created", created);
+            out.put("days", dayCount);
+            out.put("totalAmount", BillingService.round2(totalAmount));
+            out.put("discount", BillingService.round2(totalDiscount));
+            out.put("couponCode", offer == null ? null : offer.getCode());
+            out.put("duplicate", false);
+            return out;
         } catch (RuntimeException e) {
             // The save failed — release the id so the user can retry cleanly.
             if (lockTaken) processedRequestRepository.deleteById(req.requestId());
@@ -276,10 +268,33 @@ public class AdminController {
         }
     }
 
-    /** Shared by the single and bulk entry endpoints. */
+    /**
+     * Shared by the single and bulk entry endpoints.
+     *
+     * The rate is left at its real per-unit price and the coupon comes off the
+     * line total instead — a discounted rate would make "₹90 / litre" read as a
+     * price change on the bill, and the original price would be lost.
+     */
     private DailyEntry saveEntry(User customer, Product product, double quantity, Double rateOverride,
-                                 LocalDate date, String note, boolean paid, String paymentMode) {
-        double rate = (rateOverride != null && rateOverride > 0) ? rateOverride : product.getPrice();
+                                 String packLabel, LocalDate date, String note, boolean paid,
+                                 String paymentMode, Offer offer) {
+        double rate;
+        double gross;
+        double baseQty = quantity;
+        ProductVariant pack = findPack(product, packLabel);
+
+        if (pack != null) {
+            // The pack's own price is the truth. gross comes from packs x price
+            // rather than baseQty x rate, so the small premium on a half-kilo
+            // survives instead of being rounded back out of existence.
+            baseQty = BillingService.round2(quantity * pack.getQuantity());
+            gross = BillingService.round2(quantity * pack.getPrice());
+            rate = pack.ratePerUnit();
+        } else {
+            rate = (rateOverride != null && rateOverride > 0) ? rateOverride : product.getPrice();
+            gross = BillingService.round2(quantity * rate);
+        }
+        double discount = OfferService.discountOn(gross, offer);
 
         DailyEntry entry = new DailyEntry();
         entry.setCustomerId(customer.getId());
@@ -287,9 +302,19 @@ public class AdminController {
         entry.setProductId(product.getId());
         entry.setProductName(product.getName());
         entry.setUnit(product.getUnit());
-        entry.setQuantity(quantity);
+        entry.setQuantity(baseQty);
         entry.setRate(rate);
-        entry.setTotal(BillingService.round2(quantity * rate));
+        if (pack != null) {
+            entry.setPackLabel(pack.getLabel());
+            entry.setPackCount(quantity);
+        }
+        entry.setGrossTotal(gross);
+        entry.setDiscountAmount(discount);
+        entry.setTotal(BillingService.round2(gross - discount));
+        if (offer != null) {
+            entry.setCouponCode(offer.getCode());
+            entry.setDiscountPercent(offer.getPercentOff());
+        }
         entry.setEntryDate(date != null ? date : LocalDate.now());
         entry.setNote(note);
         entry = entryRepository.save(entry);
@@ -446,6 +471,10 @@ public class AdminController {
             due.setQuantity(1);
             due.setRate(BillingService.round2(req.amount()));
             due.setTotal(BillingService.round2(req.amount()));
+            // A carried-over balance is never discounted — the coupon applied
+            // (or didn't) back when the original entries were written.
+            due.setGrossTotal(BillingService.round2(req.amount()));
+            due.setDiscountAmount(0);
             due.setEntryDate(cycle.atEndOfMonth());
             due.setNote(req.note());
             due.setPaid(false);
@@ -560,6 +589,7 @@ public class AdminController {
         product.setAvailable(req.isAvailable());
         product.setComingSoon(req.isComingSoon());
         product.setSortOrder(req.getSortOrder());
+        product.setVariants(req.getVariants());
         return productRepository.save(product);
     }
 
@@ -570,10 +600,64 @@ public class AdminController {
         return Map.of("status", "deleted");
     }
 
+    /** The named pack on this product, or null when the sale is loose quantity. */
+    private ProductVariant findPack(Product product, String packLabel) {
+        if (packLabel == null || packLabel.isBlank()) return null;
+        String wanted = packLabel.trim();
+        if (product.getVariants() == null) {
+            throw badRequest(product.getName() + " is not sold in packs.");
+        }
+        return product.getVariants().stream()
+                .filter(v -> wanted.equalsIgnoreCase(v.getLabel()))
+                .findFirst()
+                .orElseThrow(() -> badRequest("\"" + wanted + "\" is not a pack size for " + product.getName() + "."));
+    }
+
     private void validateProduct(Product p) {
         if (p.getName() == null || p.getName().isBlank()) throw badRequest("Product name is required");
         if (p.getUnit() == null || p.getUnit().isBlank()) throw badRequest("Product unit is required");
         if (p.getPrice() <= 0) throw badRequest("Product price must be greater than 0");
+        normalizeVariants(p);
+    }
+
+    /**
+     * Packs are cleaned up in place: blank rows dropped, labels trimmed, and
+     * duplicates rejected — two packs sharing a label would make the one a
+     * khata entry resolves to a coin toss.
+     */
+    private void normalizeVariants(Product p) {
+        List<ProductVariant> variants = p.getVariants();
+        if (variants == null || variants.isEmpty()) {
+            p.setVariants(null);
+            return;
+        }
+        if (variants.size() > 10) throw badRequest("A product can have at most 10 pack sizes");
+
+        List<ProductVariant> clean = new ArrayList<>();
+        List<String> seen = new ArrayList<>();
+        for (ProductVariant v : variants) {
+            if (v == null) continue;
+            String label = (v.getLabel() == null) ? "" : v.getLabel().trim();
+            if (label.isEmpty() && v.getQuantity() <= 0 && v.getPrice() <= 0) continue;
+            if (label.isEmpty()) throw badRequest("Every pack needs a label, e.g. \"Half kg\"");
+            if (v.getQuantity() <= 0) {
+                throw badRequest("Pack \"" + label + "\" needs how much " + p.getUnit() + " it holds");
+            }
+            if (v.getPrice() <= 0) throw badRequest("Pack \"" + label + "\" needs a price greater than 0");
+            String key = label.toLowerCase();
+            if (seen.contains(key)) throw badRequest("Two packs are both called \"" + label + "\"");
+            seen.add(key);
+
+            ProductVariant out = new ProductVariant();
+            out.setLabel(label);
+            out.setQuantity(BillingService.round2(v.getQuantity()));
+            out.setPrice(BillingService.round2(v.getPrice()));
+            out.setAvailable(v.isAvailable());
+            clean.add(out);
+        }
+        // Smallest pack first, so the chips read 200 g -> 400 g -> 1 kg.
+        clean.sort(java.util.Comparator.comparingDouble(ProductVariant::getQuantity));
+        p.setVariants(clean.isEmpty() ? null : clean);
     }
 
     // ---------------------- Staff (full-admin only) -----------------------

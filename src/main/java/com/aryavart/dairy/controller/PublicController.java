@@ -1,19 +1,27 @@
 package com.aryavart.dairy.controller;
 
+import com.aryavart.dairy.dto.CouponPreview;
+import com.aryavart.dairy.model.Offer;
 import com.aryavart.dairy.model.Product;
 import com.aryavart.dairy.repository.ProductRepository;
+import com.aryavart.dairy.service.BillingService;
+import com.aryavart.dairy.service.OfferService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
-/** Endpoints reachable without a login (product listing). */
+/** Endpoints reachable without a login (product listing, live offers). */
 @RestController
 @RequestMapping("/api/public")
 public class PublicController {
@@ -21,9 +29,11 @@ public class PublicController {
     private static final Logger log = LoggerFactory.getLogger(PublicController.class);
 
     private final ProductRepository productRepository;
+    private final OfferService offerService;
 
-    public PublicController(ProductRepository productRepository) {
+    public PublicController(ProductRepository productRepository, OfferService offerService) {
         this.productRepository = productRepository;
+        this.offerService = offerService;
     }
 
     /**
@@ -57,6 +67,59 @@ public class PublicController {
     private static int rank(Product p) {
         if (p.isComingSoon()) return 2;
         return p.isAvailable() ? 0 : 1;
+    }
+
+    // ------------------------------ Offers ------------------------------
+
+    /**
+     * Live, advertisable coupons — what the strip across the top of the site
+     * announces. Private codes (showOnSite off) still work, they just aren't
+     * listed here.
+     */
+    @GetMapping("/offers")
+    public List<Offer> offers() {
+        return offerService.publicOffers();
+    }
+
+    /**
+     * "Does this code work, and what does it take off my ₹640?"
+     *
+     * A bad code answers 200 with valid=false, not an HTTP error — a typo in
+     * the cart should read as a hint under the input, not as a broken site.
+     */
+    @GetMapping("/offers/validate")
+    public CouponPreview validate(@RequestParam String code,
+                                  @RequestParam(required = false) Double amount) {
+        String typed = OfferService.normalize(code);
+        if (typed == null) {
+            return CouponPreview.rejected(code, "Please enter a coupon code.");
+        }
+        Offer offer;
+        try {
+            offer = offerService.resolve(typed, Offer.WEBSITE);
+        } catch (ResponseStatusException e) {
+            return CouponPreview.rejected(typed, e.getReason());
+        }
+        double base = (amount == null || amount < 0) ? 0 : BillingService.round2(amount);
+        double discount = OfferService.discountOn(base, offer);
+        return new CouponPreview(true, offer.getCode(), offer.getTitle(), offer.getDescription(),
+                offer.getPercentOff(), base, discount, BillingService.round2(base - discount),
+                "Coupon applied — you save ₹" + discount + ".");
+    }
+
+    /**
+     * Bumped when a customer actually sends their WhatsApp order with a code
+     * attached. Orders live in WhatsApp rather than in this database, so this
+     * counter is the only signal the farm gets about which campaign is landing.
+     */
+    @PostMapping("/offers/{code}/used")
+    public Map<String, String> markUsed(@PathVariable String code) {
+        try {
+            offerService.markUsed(offerService.resolve(code, Offer.WEBSITE));
+        } catch (ResponseStatusException ignored) {
+            // Counting is best-effort; a stale code here must not break checkout.
+        }
+        return Map.of("status", "ok");
     }
 
     @GetMapping("/categories")
