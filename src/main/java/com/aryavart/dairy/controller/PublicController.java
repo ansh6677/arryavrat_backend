@@ -1,6 +1,7 @@
 package com.aryavart.dairy.controller;
 
 import com.aryavart.dairy.dto.CouponPreview;
+import com.aryavart.dairy.dto.BannerInfo;
 import com.aryavart.dairy.dto.DeliveryInfo;
 import com.aryavart.dairy.model.Offer;
 import com.aryavart.dairy.model.Product;
@@ -52,6 +53,17 @@ public class PublicController {
     }
 
     /**
+     * The announcement strip under the header. Separate from /settings on
+     * purpose: every page asks for this, only the cart asks for delivery.
+     */
+    @GetMapping("/banner")
+    public BannerInfo banner() {
+        var s = settingsService.get();
+        List<String> lines = s.getBannerMessages() == null ? List.of() : s.getBannerMessages();
+        return new BannerInfo(s.isBannerEnabled() && !lines.isEmpty(), lines, s.getBannerTone());
+    }
+
+    /**
      * Every product is returned — sold-out and upcoming items included. The site
      * shows them with a clear status badge instead of hiding them, so customers
      * can still see the full range and request what they want.
@@ -87,7 +99,7 @@ public class PublicController {
     // ------------------------------ Offers ------------------------------
 
     /**
-     * Live, advertisable coupons — what the strip across the top of the site
+     * Live, listable coupons — what the cart's offer list
      * announces. Private codes (showOnSite off) still work, they just aren't
      * listed here.
      */

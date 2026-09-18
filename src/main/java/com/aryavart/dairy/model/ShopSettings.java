@@ -35,6 +35,24 @@ public class ShopSettings {
     /** Optional line shown under the delivery row in the cart. */
     private String deliveryNote;
 
+    // ---------------- announcement strip ----------------
+
+    /** Off by default: an empty gold bar under the header helps nobody. */
+    private boolean bannerEnabled = false;
+
+    /**
+     * What the strip says, one phrase per entry. Several short lines read
+     * better on a moving strip than one long sentence, and they let the farm
+     * put an offer, a holiday notice and a phone number up at the same time.
+     *
+     * Deliberately free text with no link to the offers table — the strip is
+     * the farm's own noticeboard, not a coupon feed.
+     */
+    private java.util.List<String> bannerMessages;
+
+    /** gold (normal), green (good news) or red (something is off today). */
+    private String bannerTone = "gold";
+
     private Instant updatedAt = Instant.now();
     private String updatedBy;
 }

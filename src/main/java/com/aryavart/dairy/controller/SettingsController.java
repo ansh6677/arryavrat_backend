@@ -1,5 +1,6 @@
 package com.aryavart.dairy.controller;
 
+import com.aryavart.dairy.dto.BannerInfo;
 import com.aryavart.dairy.dto.DeliveryInfo;
 import com.aryavart.dairy.model.ShopSettings;
 import com.aryavart.dairy.service.SettingsService;
@@ -38,6 +39,15 @@ public class SettingsController {
                 body.freeDeliveryAbove(),
                 body.deliveryCharge(),
                 body.deliveryNote(),
+                auth != null ? auth.getName() : null);
+    }
+
+    @PutMapping("/banner")
+    public ShopSettings saveBanner(@RequestBody BannerInfo body, Authentication auth) {
+        return settings.saveBanner(
+                body.enabled(),
+                body.messages(),
+                body.tone(),
                 auth != null ? auth.getName() : null);
     }
 }
