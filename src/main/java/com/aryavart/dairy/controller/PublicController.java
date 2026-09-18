@@ -1,11 +1,13 @@
 package com.aryavart.dairy.controller;
 
 import com.aryavart.dairy.dto.CouponPreview;
+import com.aryavart.dairy.dto.DeliveryInfo;
 import com.aryavart.dairy.model.Offer;
 import com.aryavart.dairy.model.Product;
 import com.aryavart.dairy.repository.ProductRepository;
 import com.aryavart.dairy.service.BillingService;
 import com.aryavart.dairy.service.OfferService;
+import com.aryavart.dairy.service.SettingsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,10 +32,23 @@ public class PublicController {
 
     private final ProductRepository productRepository;
     private final OfferService offerService;
+    private final SettingsService settingsService;
 
-    public PublicController(ProductRepository productRepository, OfferService offerService) {
+    public PublicController(ProductRepository productRepository, OfferService offerService,
+                            SettingsService settingsService) {
         this.productRepository = productRepository;
         this.offerService = offerService;
+        this.settingsService = settingsService;
+    }
+
+    /**
+     * The delivery rule, for the cart. Public because the charge has to appear
+     * in the order summary before anyone signs in — most customers never do.
+     */
+    @GetMapping("/settings")
+    public DeliveryInfo settings() {
+        var s = settingsService.get();
+        return new DeliveryInfo(s.getFreeDeliveryAbove(), s.getDeliveryCharge(), s.getDeliveryNote());
     }
 
     /**

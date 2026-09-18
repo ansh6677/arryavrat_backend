@@ -310,44 +310,59 @@ public class StatsService {
         Map<String, String> names = userRepository.findByRoleOrderByNameAsc("CUSTOMER").stream()
                 .collect(Collectors.toMap(User::getId, User::getName, (a, b) -> a));
 
-        if ("OUTSTANDING".equals(kind)) {
-            // Entries minus confirmed payments, per customer. Counter sales are
-            // absent on purpose: they are paid on the spot and cancel out of the
-            // dashboard's own outstanding figure too.
-            Map<String, Double> owed = new java.util.HashMap<>();
-            Map<String, Integer> counts = new java.util.HashMap<>();
-            for (DailyEntry e : entryRepository.findAll()) {
-                if (e.getCustomerId() == null) continue;
-                owed.merge(e.getCustomerId(), e.getTotal(), Double::sum);
-                counts.merge(e.getCustomerId(), 1, Integer::sum);
-            }
-            for (Payment pay : paymentRepository.findAll()) {
-                if (!pay.isConfirmed() || pay.getCustomerId() == null) continue;
-                owed.merge(pay.getCustomerId(), -pay.getAmount(), Double::sum);
-            }
+        return switch (kind) {
+            case "OUTSTANDING" -> outstanding(names);
+            case "TODAY_SALES" -> sales(names, today, today, "TODAY_SALES",
+                    "Today's sales", FULL_DAY_LABEL.format(today));
+            case "MONTH_SALES" -> sales(names, monthStart, monthEnd, "MONTH_SALES",
+                    monthName + " sales", "Khata entries and counter sales");
+            case "WALKIN" -> walkin(monthStart, monthEnd, monthName);
+            case "EXPENSES" -> expenses(monthStart, monthEnd, monthName);
+            case "PROFIT" -> profit(monthStart, monthEnd, monthName);
+            case "CUSTOMERS" -> customers(names);
+            default -> collected("CASH".equals(kind), names, monthStart, monthEnd, monthName);
+        };
+    }
 
-            List<BreakdownResponse.Row> rows = owed.entrySet().stream()
-                    .filter(en -> BillingService.round2(en.getValue()) > 0)
-                    .map(en -> new BreakdownResponse.Row(
-                            en.getKey(),
-                            names.getOrDefault(en.getKey(), "Deleted customer"),
-                            BillingService.round2(en.getValue()),
-                            counts.getOrDefault(en.getKey(), 0) + " entries"))
-                    .sorted(Comparator.comparingDouble(BreakdownResponse.Row::amount).reversed())
-                    .toList();
-            double total = rows.stream().mapToDouble(BreakdownResponse.Row::amount).sum();
-            return new BreakdownResponse("OUTSTANDING", "Total outstanding",
-                    rows.size() + (rows.size() == 1 ? " customer owes money" : " customers owe money"),
-                    BillingService.round2(total), rows);
+    /** Entries minus confirmed payments, per customer — all time. */
+    private BreakdownResponse outstanding(Map<String, String> names) {
+        // Counter sales are absent on purpose: they are paid on the spot and
+        // cancel out of the dashboard's own outstanding figure too.
+        Map<String, Double> owed = new java.util.HashMap<>();
+        Map<String, Integer> counts = new java.util.HashMap<>();
+        for (DailyEntry e : entryRepository.findAll()) {
+            if (e.getCustomerId() == null) continue;
+            owed.merge(e.getCustomerId(), e.getTotal(), Double::sum);
+            counts.merge(e.getCustomerId(), 1, Integer::sum);
+        }
+        for (Payment pay : paymentRepository.findAll()) {
+            if (!pay.isConfirmed() || pay.getCustomerId() == null) continue;
+            owed.merge(pay.getCustomerId(), -pay.getAmount(), Double::sum);
         }
 
-        boolean wantCash = "CASH".equals(kind);
+        List<BreakdownResponse.Row> rows = owed.entrySet().stream()
+                .filter(en -> BillingService.round2(en.getValue()) > 0)
+                .map(en -> new BreakdownResponse.Row(
+                        en.getKey(),
+                        names.getOrDefault(en.getKey(), "Deleted customer"),
+                        BillingService.round2(en.getValue()),
+                        plural(counts.getOrDefault(en.getKey(), 0), "entry", "entries")))
+                .sorted(Comparator.comparingDouble(BreakdownResponse.Row::amount).reversed())
+                .toList();
+        return new BreakdownResponse("OUTSTANDING", "Total outstanding",
+                plural(rows.size(), "customer owes money", "customers owe money"),
+                sum(rows), rows);
+    }
+
+    /** Confirmed payments in the month, split the way the two cards split them. */
+    private BreakdownResponse collected(boolean wantCash, Map<String, String> names,
+                                        LocalDate from, LocalDate to, String monthName) {
         Map<String, Double> paid = new java.util.HashMap<>();
         Map<String, Integer> counts = new java.util.HashMap<>();
         for (Payment pay : paymentRepository.findAll()) {
             LocalDate d = pay.getPaymentDate();
             if (!pay.isConfirmed() || d == null || pay.getCustomerId() == null) continue;
-            if (d.isBefore(monthStart) || d.isAfter(monthEnd)) continue;
+            if (d.isBefore(from) || d.isAfter(to)) continue;
             if (isCash(pay.getMode()) != wantCash) continue;
             paid.merge(pay.getCustomerId(), pay.getAmount(), Double::sum);
             counts.merge(pay.getCustomerId(), 1, Integer::sum);
@@ -358,8 +373,7 @@ public class StatsService {
                         en.getKey(),
                         names.getOrDefault(en.getKey(), "Deleted customer"),
                         BillingService.round2(en.getValue()),
-                        counts.getOrDefault(en.getKey(), 0)
-                                + (counts.getOrDefault(en.getKey(), 0) == 1 ? " payment" : " payments")))
+                        plural(counts.getOrDefault(en.getKey(), 0), "payment", "payments")))
                 .sorted(Comparator.comparingDouble(BreakdownResponse.Row::amount).reversed())
                 .toList());
 
@@ -370,22 +384,185 @@ public class StatsService {
         int counterCount = 0;
         for (ExtraSale x : extraSaleRepository.findAll()) {
             LocalDate d = x.getSaleDate();
-            if (d == null || d.isBefore(monthStart) || d.isAfter(monthEnd)) continue;
+            if (d == null || d.isBefore(from) || d.isAfter(to)) continue;
             if (isCash(x.getPaymentMode()) != wantCash) continue;
             counter += x.getTotal();
             counterCount++;
         }
         if (counterCount > 0) {
             rows.add(new BreakdownResponse.Row(null, "Counter sales (walk-in)",
-                    BillingService.round2(counter),
-                    counterCount + (counterCount == 1 ? " sale" : " sales")));
+                    BillingService.round2(counter), plural(counterCount, "sale", "sales")));
         }
 
-        double total = rows.stream().mapToDouble(BreakdownResponse.Row::amount).sum();
         return new BreakdownResponse(wantCash ? "CASH" : "ONLINE",
                 monthName + (wantCash ? " cash collected" : " online collected"),
                 wantCash ? "Hand-to-hand, counter sales included" : "UPI, bank transfer and other",
-                BillingService.round2(total), rows);
+                sum(rows), rows);
+    }
+
+    /**
+     * Who was sold to over a date range — the click-through on the two sales
+     * cards. Counter sales ride along as one unlinked row because the cards
+     * count them too.
+     */
+    private BreakdownResponse sales(Map<String, String> names, LocalDate from, LocalDate to,
+                                    String type, String title, String subtitle) {
+        Map<String, Double> sold = new java.util.HashMap<>();
+        Map<String, Integer> counts = new java.util.HashMap<>();
+        for (DailyEntry e : entryRepository.findInRange(from, to)) {
+            String key = e.getCustomerId() == null ? "" : e.getCustomerId();
+            sold.merge(key, e.getTotal(), Double::sum);
+            counts.merge(key, 1, Integer::sum);
+        }
+
+        List<BreakdownResponse.Row> rows = new ArrayList<>(sold.entrySet().stream()
+                .map(en -> new BreakdownResponse.Row(
+                        en.getKey().isEmpty() ? null : en.getKey(),
+                        en.getKey().isEmpty() ? "Entries without a customer"
+                                : names.getOrDefault(en.getKey(), "Deleted customer"),
+                        BillingService.round2(en.getValue()),
+                        plural(counts.getOrDefault(en.getKey(), 0), "entry", "entries")))
+                .sorted(Comparator.comparingDouble(BreakdownResponse.Row::amount).reversed())
+                .toList());
+
+        double counter = 0;
+        int counterCount = 0;
+        for (ExtraSale x : extraSaleRepository.findInRange(from, to)) {
+            counter += x.getTotal();
+            counterCount++;
+        }
+        if (counterCount > 0) {
+            rows.add(new BreakdownResponse.Row(null, "Counter sales (walk-in)",
+                    BillingService.round2(counter), plural(counterCount, "sale", "sales")));
+        }
+
+        return new BreakdownResponse(type, title, subtitle, sum(rows), rows);
+    }
+
+    /** The Extra Sells counter, product by product. */
+    private BreakdownResponse walkin(LocalDate from, LocalDate to, String monthName) {
+        Map<String, Double> amount = new LinkedHashMap<>();
+        Map<String, Integer> counts = new java.util.HashMap<>();
+        Map<String, Double> qty = new java.util.HashMap<>();
+        Map<String, String> units = new java.util.HashMap<>();
+        for (ExtraSale x : extraSaleRepository.findInRange(from, to)) {
+            String key = (x.getProductName() == null || x.getProductName().isBlank())
+                    ? "Other" : x.getProductName();
+            amount.merge(key, x.getTotal(), Double::sum);
+            counts.merge(key, 1, Integer::sum);
+            qty.merge(key, x.getQuantity(), Double::sum);
+            units.putIfAbsent(key, x.getUnit());
+        }
+
+        List<BreakdownResponse.Row> rows = amount.entrySet().stream()
+                .map(en -> new BreakdownResponse.Row(null, en.getKey(),
+                        BillingService.round2(en.getValue()),
+                        plural(counts.getOrDefault(en.getKey(), 0), "sale", "sales")
+                                + " · " + trim(qty.getOrDefault(en.getKey(), 0.0))
+                                + (units.get(en.getKey()) == null ? "" : " " + units.get(en.getKey()))))
+                .sorted(Comparator.comparingDouble(BreakdownResponse.Row::amount).reversed())
+                .toList();
+
+        return new BreakdownResponse("WALKIN", monthName + " walk-in sales",
+                "Counter sales, product by product", sum(rows), rows);
+    }
+
+    /** Spending for the month, grouped the way it is entered — by category. */
+    private BreakdownResponse expenses(LocalDate from, LocalDate to, String monthName) {
+        Map<String, Double> spent = new LinkedHashMap<>();
+        Map<String, Integer> counts = new java.util.HashMap<>();
+        for (Expense x : expenseRepository.findInRange(from, to)) {
+            String key = (x.getCategory() == null || x.getCategory().isBlank()) ? "Other" : x.getCategory();
+            spent.merge(key, x.getAmount(), Double::sum);
+            counts.merge(key, 1, Integer::sum);
+        }
+
+        List<BreakdownResponse.Row> rows = spent.entrySet().stream()
+                .map(en -> new BreakdownResponse.Row(null, en.getKey(),
+                        BillingService.round2(en.getValue()),
+                        plural(counts.getOrDefault(en.getKey(), 0), "expense", "expenses")))
+                .sorted(Comparator.comparingDouble(BreakdownResponse.Row::amount).reversed())
+                .toList();
+
+        return new BreakdownResponse("EXPENSES", monthName + " expenses",
+                "Category by category", sum(rows), rows);
+    }
+
+    /**
+     * The three numbers the profit card is made of. Expenses are a negative
+     * row rather than a footnote, so the rows still add up to the card.
+     */
+    private BreakdownResponse profit(LocalDate from, LocalDate to, String monthName) {
+        double khata = 0;
+        int khataCount = 0;
+        for (DailyEntry e : entryRepository.findInRange(from, to)) {
+            khata += e.getTotal();
+            khataCount++;
+        }
+        double counter = 0;
+        int counterCount = 0;
+        for (ExtraSale x : extraSaleRepository.findInRange(from, to)) {
+            counter += x.getTotal();
+            counterCount++;
+        }
+        double spent = 0;
+        int spentCount = 0;
+        for (Expense x : expenseRepository.findInRange(from, to)) {
+            spent += x.getAmount();
+            spentCount++;
+        }
+
+        List<BreakdownResponse.Row> rows = new ArrayList<>();
+        rows.add(new BreakdownResponse.Row(null, "Khata sales", BillingService.round2(khata),
+                plural(khataCount, "entry", "entries")));
+        rows.add(new BreakdownResponse.Row(null, "Counter sales (walk-in)", BillingService.round2(counter),
+                plural(counterCount, "sale", "sales")));
+        rows.add(new BreakdownResponse.Row(null, "Expenses", BillingService.round2(-spent),
+                plural(spentCount, "expense", "expenses")));
+
+        return new BreakdownResponse("PROFIT", monthName + " profit",
+                "Sales minus expenses", sum(rows), rows);
+    }
+
+    /** Everyone on the khata, with what they owe right now. */
+    private BreakdownResponse customers(Map<String, String> names) {
+        Map<String, Double> owed = new java.util.HashMap<>();
+        Map<String, Integer> counts = new java.util.HashMap<>();
+        for (DailyEntry e : entryRepository.findAll()) {
+            if (e.getCustomerId() == null) continue;
+            owed.merge(e.getCustomerId(), e.getTotal(), Double::sum);
+            counts.merge(e.getCustomerId(), 1, Integer::sum);
+        }
+        for (Payment pay : paymentRepository.findAll()) {
+            if (!pay.isConfirmed() || pay.getCustomerId() == null) continue;
+            owed.merge(pay.getCustomerId(), -pay.getAmount(), Double::sum);
+        }
+
+        // Driven by the customer list, not by the entries, so a customer who has
+        // never been billed still appears — the card counts them.
+        List<BreakdownResponse.Row> rows = names.entrySet().stream()
+                .map(en -> new BreakdownResponse.Row(en.getKey(), en.getValue(),
+                        BillingService.round2(owed.getOrDefault(en.getKey(), 0.0)),
+                        plural(counts.getOrDefault(en.getKey(), 0), "entry", "entries")))
+                .sorted(Comparator.comparingDouble(BreakdownResponse.Row::amount).reversed())
+                .toList();
+
+        return new BreakdownResponse("CUSTOMERS", "Customers",
+                plural(rows.size(), "customer on the khata", "customers on the khata"),
+                sum(rows), rows);
+    }
+
+    private static double sum(List<BreakdownResponse.Row> rows) {
+        return BillingService.round2(rows.stream().mapToDouble(BreakdownResponse.Row::amount).sum());
+    }
+
+    private static String plural(int n, String one, String many) {
+        return n + " " + (n == 1 ? one : many);
+    }
+
+    /** "2" reads better than "2.0" in a row's small print. */
+    private static String trim(double v) {
+        return (v == Math.floor(v)) ? String.valueOf((long) v) : String.valueOf(BillingService.round2(v));
     }
 
     /** Full breakdown for a single day — shown when a chart bar is clicked. */

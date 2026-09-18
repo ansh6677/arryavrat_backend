@@ -640,6 +640,7 @@ public class AdminController {
         product.setUnit(req.getUnit());
         product.setPrice(req.getPrice());
         product.setImageUrl(req.getImageUrl());
+        product.setImages(req.getImages());
         product.setAvailable(req.isAvailable());
         product.setComingSoon(req.isComingSoon());
         product.setSortOrder(req.getSortOrder());
@@ -917,8 +918,11 @@ public class AdminController {
 
     /** Sales and expenses for a single day — opens when a chart bar is clicked. */
     /**
-     * Who is behind a dashboard figure. type is CASH, ONLINE or OUTSTANDING;
-     * month is ignored for OUTSTANDING, which is always all-time.
+     * Who is behind a dashboard figure — every stat card drills through here.
+     *
+     * type is CASH, ONLINE, OUTSTANDING, TODAY_SALES, MONTH_SALES, WALKIN,
+     * EXPENSES, PROFIT or CUSTOMERS. month is ignored by the all-time ones
+     * (OUTSTANDING, CUSTOMERS) and by TODAY_SALES, which is always today.
      */
     @GetMapping("/stats/breakdown")
     public BreakdownResponse statsBreakdown(@RequestParam String type,

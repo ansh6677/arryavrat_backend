@@ -19,6 +19,15 @@ public class Product {
     private String unit;         // Litre, Kg, Gram, Piece, Packet
     private double price;        // price per unit (INR)
     private String imageUrl;
+
+    /**
+     * The photo gallery, in the order the website swipes through it. The first
+     * entry is the cover and is mirrored into {@link #imageUrl} on save, so
+     * every screen that predates the gallery — cards, cart, bills — keeps
+     * working without knowing this field exists.
+     */
+    private java.util.List<String> images;
+
     private boolean available = true;
 
     /** Teaser products (e.g. Mushroom, Spices) shown on the site before launch. */
