@@ -659,6 +659,7 @@ public class AdminController {
         product.setUnit(req.getUnit());
         product.setPrice(req.getPrice());
         product.setImageUrl(req.getImageUrl());
+        product.setImages(req.getImages());
         product.setAvailable(req.isAvailable());
         product.setComingSoon(req.isComingSoon());
         product.setSortOrder(req.getSortOrder());
