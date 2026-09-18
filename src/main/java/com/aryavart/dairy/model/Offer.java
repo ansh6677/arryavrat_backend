@@ -34,7 +34,7 @@ public class Offer {
     @Indexed(unique = true)
     private String code;
 
-    /** Headline on the site strip, e.g. "10% off everything". */
+    /** Headline on the coupon card in the cart, e.g. "10% off everything". */
     private String title;
 
     /** One line of small print under the headline. Optional. */
@@ -66,7 +66,7 @@ public class Offer {
     private LocalDate validTo;
 
     /**
-     * Whether the sitewide strip advertises this code. Off makes it a private
+     * Whether the cart lists this code. Off makes it a private
      * code — it still works, but only for customers who were told it.
      */
     private boolean showOnSite = true;

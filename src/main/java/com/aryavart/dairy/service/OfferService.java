@@ -45,7 +45,7 @@ public class OfferService {
                 .toList();
     }
 
-    /** Live, advertisable offers — what the sitewide strip shows. */
+    /** Live, listable offers — what the cart's offer list shows. */
     public List<Offer> publicOffers() {
         return liveOffers(Offer.WEBSITE).stream()
                 .filter(Offer::isShowOnSite)
